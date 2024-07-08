@@ -15,4 +15,6 @@ name = "dip"
 [dependencies]
 clap = { version = "4.5.8", features = ["derive"] }
 config = "0.14.0"
-sqlx = { version = "0.7.4", features = ["macros", "uuid", "chrono", "migrate", "sqlite"]}
+serde = { version = "1.0.204", features = ["derive"] }
+sqlx = { version = "0.7.4", features = ["macros", "uuid", "chrono", "migrate", "sqlite", "runtime-tokio-rustls"]}
+tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
