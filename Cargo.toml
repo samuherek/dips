@@ -5,4 +5,14 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+path = "src/main.rs"
+name = "dip"
+
 [dependencies]
+clap = { version = "4.5.8", features = ["derive"] }
+config = "0.14.0"
+sqlx = { version = "0.7.4", features = ["macros", "uuid", "chrono", "migrate", "sqlite"]}
