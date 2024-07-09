@@ -18,7 +18,7 @@ enum Commands {
 pub async fn run() {
     let cli = Cli::parse();
     let configuration = configuration::get_configuration().expect("Failed to load configuration.");
-    println!("config: {:?}", configuration);
+
     match cli.command {
         Some(Commands::Init) => {
             commands::init::init(&configuration).await;

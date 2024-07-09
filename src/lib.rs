@@ -1,4 +1,6 @@
 pub mod cli;
 mod commands;
-mod database;
 pub mod configuration;
+mod database;
+mod models;
+
