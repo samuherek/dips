@@ -12,10 +12,13 @@ pub struct DatabaseSettings {
 impl DatabaseSettings {
     pub fn connection_string(&self) -> String {
         format!(
-            "sqlite://{}/{}.db",
+            "sqlite:{}/{}.db",
             self.path.to_string_lossy(),
             self.database_name
         )
+    }
+    pub fn db_path(&self) -> std::path::PathBuf {
+        self.path.join(format!("{}.db", self.database_name))
     }
 }
 

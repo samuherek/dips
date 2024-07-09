@@ -1,9 +1,8 @@
 -- Add migration script here
 CREATE TABLE dips(
-    id uuid NOT NULL,
-    PRIMARY KEY (id),
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
     value TEXT NOT NULL,
     note TEXT,
-    created_at timestamptz NOT NULL,
-    updated_at timestamptz NOT NULL
+    created_at TIMESTAMP NOT NULL, 
+    updated_at TIMESTAMP NOT NULL
 );

@@ -8,7 +8,12 @@ pub struct Database {
 impl Database {
     pub async fn connect(config: &Settings) -> Self {
         let conn_string = config.database.connection_string();
-        println!("connection string {}", conn_string);
+        let file_path = config.database.db_path(); 
+
+        if !file_path.exists() {
+            std::fs::File::create(file_path).expect("Failed to create database file.");
+        }
+
         let conn = SqliteConnection::connect(&conn_string)
             .await
             .expect("Failed to connect to sqlite");
