@@ -1,16 +1,22 @@
 use crate::configuration::Settings;
-use sqlx::{Connection, SqliteConnection};
+use sqlx::SqlitePool;
 
 pub struct Database {
-    pub conn: SqliteConnection,
+    pub conn: SqlitePool,
 }
 
 impl Database {
     pub async fn connect(config: &Settings) -> Self {
         let conn_string = config.database.connection_string();
-        let conn = SqliteConnection::connect(&conn_string)
+        let conn = SqlitePool::connect(&conn_string)
             .await
             .expect("Failed to connect to sqlite");
+
+        sqlx::query("PRAGMA foreign_keys = ON;")
+            .execute(&conn)
+            .await
+            .expect("Failed set foreign keys in sqlite.");
+
         Self { conn }
     }
 
@@ -24,10 +30,10 @@ impl Database {
 
     pub async fn init(config: &Settings) -> Self {
         Database::create_database_file(config);
-        let mut db = Database::connect(config).await;
+        let db = Database::connect(config).await;
 
         sqlx::migrate!("./migrations")
-            .run(&mut db.conn)
+            .run(&db.conn)
             .await
             .expect("Failed to migrate database.");
 

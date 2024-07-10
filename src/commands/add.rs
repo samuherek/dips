@@ -1,9 +1,12 @@
 use crate::configuration::Settings;
 use crate::database::Database;
-use crate::models::dip::Dip;
-use sqlx::SqliteConnection;
+use crate::models::{
+    dip::Dip,
+    dir_context::{self, DirContext},
+};
+use sqlx::SqlitePool;
 
-async fn value_exists(conn: &mut SqliteConnection, value: &str) -> bool {
+async fn value_exists(conn: &SqlitePool, value: &str) -> bool {
     sqlx::query!("SELECT * FROM dips WHERE value = ?1", value)
         .fetch_optional(conn)
         .await
@@ -12,24 +15,59 @@ async fn value_exists(conn: &mut SqliteConnection, value: &str) -> bool {
 }
 
 pub async fn add(config: &Settings, value: &str) {
-    let mut db = Database::connect(config).await;
+    let db = Database::connect(config).await;
 
     // TODO: we should check the existance of the value based on dir context
-    if value_exists(&mut db.conn, value).await {
+    if value_exists(&db.conn, value).await {
         println!("This item already eixsts.");
         std::process::exit(0);
     }
 
-    let item = Dip::new(value, None);
+    let dir = std::env::current_dir().expect("Failed to load current directory.");
+    let local_ctx = DirContext::find_local(&dir).expect("Failed to identify context.");
+    // We first want to find as we want to create within a transaction
+    let db_ctx = dir_context::db_find_one(&db.conn, &local_ctx).await;
+    let mut dir_context_id = local_ctx.id.clone();
+    let mut tx = db
+        .conn
+        .begin()
+        .await
+        .expect("Failed to start transaction in sqlite");
+
+    if let Some(ctx) = db_ctx {
+        dir_context_id = ctx.id;
+    } else {
+        sqlx::query!(r#"
+            INSERT INTO dir_contexts (id, git_remote, git_dir_name, dir_path, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            "# ,
+            local_ctx.id, 
+            local_ctx.git_remote, 
+            local_ctx.git_dir_name, 
+            local_ctx.dir_path, 
+            local_ctx.created_at, 
+            local_ctx.updated_at
+        )
+            .execute(&mut *tx)
+            .await
+            .expect("Failed to execute insert query");
+    }
+
+    let item = Dip::new(&local_ctx.id, value, None);
+
     match sqlx::query!(
-        "INSERT INTO dips (id, value, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        r#"
+        INSERT INTO dips (id, value, note, dir_context_id, created_at, updated_at) 
+        VALUES (?, ?, ?, ?, ?, ?)
+        "#,
         item.id,
         item.value,
         item.note,
+        dir_context_id, 
         item.created_at,
         item.updated_at
     )
-    .execute(&mut db.conn)
+    .execute(&mut *tx)
     .await
     {
         Ok(_) => {
@@ -39,6 +77,9 @@ pub async fn add(config: &Settings, value: &str) {
             eprintln!("Failed to insert into databse: {e}");
         }
     }
+
+    // Commit the transaction
+    tx.commit().await.expect("Failed to commit transaction");
 
     // TODO:
     // Get the project
