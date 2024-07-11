@@ -23,20 +23,29 @@ enum Commands {
 
 pub async fn run() {
     let cli = Cli::parse();
-    let configuration = configuration::get_configuration().expect("Failed to load configuration.");
 
     match cli.command {
         Some(Commands::Init) => {
-            commands::init::init(&configuration).await;
+            commands::init::init().await;
         }
-        Some(Commands::Add { input }) => {
-            commands::add::add(&configuration, &input).await;
-        }
-        Some(Commands::Get { all }) => {
-            commands::get::get(&configuration, all).await;
-        }
-        None => {
-            eprintln!("Incorrect usage of dip.");
+        _ => {
+            let configuration =
+                configuration::get_configuration().expect("Failed to load configuration.");
+
+            match cli.command {
+                Some(Commands::Add { input }) => {
+                    commands::add::add(&configuration, &input).await;
+                }
+                Some(Commands::Get { all }) => {
+                    commands::get::get(&configuration, all).await;
+                }
+                _ => {
+                    println!(
+                        "Incorrect usage of dips. Please check the help section with 'dips help'"
+                    );
+                    std::process::exit(0);
+                }
+            }
         }
     }
 }

@@ -1,4 +1,4 @@
-use dip::cli;
+use dips::cli;
 
 #[tokio::main]
 async fn main() {
