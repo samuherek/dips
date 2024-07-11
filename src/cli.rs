@@ -12,7 +12,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Init,
-    Add { input: String },
+    Add {
+        input: String,
+    },
+    Get {
+        #[clap(short, long)]
+        all: bool,
+    },
 }
 
 pub async fn run() {
@@ -25,6 +31,9 @@ pub async fn run() {
         }
         Some(Commands::Add { input }) => {
             commands::add::add(&configuration, &input).await;
+        }
+        Some(Commands::Get { all }) => {
+            commands::get::get(&configuration, all).await;
         }
         None => {
             eprintln!("Incorrect usage of dip.");
