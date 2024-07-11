@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+
+    - name: Install aarch64-apple-darwin target
+      run: rustup target add aarch64-apple-darwin
+
+    - name: Build
+      run: cargo build --release --target aarch64-apple-darwin
+
+    - name: Package
+      run: |
+        APP_NAME="dips"
+        VERSION="${GITHUB_REF_NAME}"
+        OS="aarch64-apple-darwin"
+        TAR_FILE="${APP_NAME}-${VERSION}-${OS}.tar.gz"
+        tar -czvf $TAR_FILE -C target/aarch64-apple-darwin/release $APP_NAME
+        sha256sum $TAR_FILE > ${TAR_FILE}.sha256
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: release-binaries
+        path: |
+          *.tar.gz
+          *.tar.gz.sha256
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v2
+      with:
+        name: release-binaries
+        path: .
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          *.tar.gz
+          *.tar.gz.sha256
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-homebrew:
+    needs: create-release
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Homebrew Tap
+      uses: actions/checkout@v2
+      with:
+        repository: samuherek/homebrew-tap
+        path: homebrew-tap
+
+    - name: Update Homebrew Formula
+      run: |
+        VERSION=$(echo $GITHUB_REF_NAME | cut -c 2-)
+        MAC_ARM_URL="https://github.com/${{ github.repository }}/releases/download/$GITHUB_REF_NAME/dips-$GITHUB_REF_NAME-aarch64-apple-darwin.tar.gz"
+        MAC_ARM_SHA256=$(cat dips-$GITHUB_REF_NAME-aarch64-apple-darwin.tar.gz.sha256 | awk '{ print $1 }')
+        FORMULA_PATH="homebrew-tap/dips.rb"
+
+        sed -i '' "s|url \".*\"|url \"$MAC_ARM_URL\"|g" $FORMULA_PATH
+        sed -i '' "s|sha256 \".*\"|sha256 \"$MAC_ARM_SHA256\"|g" $FORMULA_PATH
+        sed -i '' "s|version \".*\"|version \"$VERSION\"|g" $FORMULA_PATH
+
+        cd homebrew-tap
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git commit -am "Update dips to $VERSION"
+        git push
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
