@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+static CONFIG_FILE: &'static str = "config.yaml";
+
 #[derive(serde::Deserialize, serde::Serialize, Debug)]
 pub struct Settings {
     pub database: DatabaseSettings,
@@ -17,7 +19,7 @@ impl Settings {
 
     pub fn init() -> Self {
         let configuration_directory = get_config_directory();
-        let config_file_path = configuration_directory.join("config.yaml");
+        let config_file_path = configuration_directory.join(CONFIG_FILE);
 
         if config_file_path.exists() {
             println!("Looks like your dips has already been initialized.");
@@ -69,11 +71,10 @@ fn get_config_directory() -> PathBuf {
 
 pub fn get_configuration() -> Result<Settings, config::ConfigError> {
     let configuration_directory = get_config_directory();
+    let config_file_path = configuration_directory.join(CONFIG_FILE);
 
     let settings = config::Config::builder()
-        .add_source(config::File::from(
-            configuration_directory.join("config.yaml"),
-        ))
+        .add_source(config::File::from(config_file_path))
         .build()
         .expect("Failed to build configuration object.");
 

@@ -20,7 +20,7 @@ impl DirContext {
 
         let id = uuid::Uuid::new_v4().into();
         let dir_path = path.display().to_string();
-        let now = chrono::Utc::now();
+        let now = chrono::Utc::now().date_naive().into();
 
         // TODO: find the git repo data
 
@@ -29,8 +29,38 @@ impl DirContext {
             git_remote: None,
             git_dir_name: None,
             dir_path,
-            created_at: now.date_naive().into(),
-            updated_at: now.date_naive().into(),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct LocalContext {
+    git_remote: Option<String>,
+    git_dir_name: Option<String>,
+    path: String,
+}
+
+impl LocalContext {
+    pub fn path(&self) -> String {
+        self.path.to_string()
+    }
+}
+
+impl TryFrom<PathBuf> for LocalContext {
+    type Error = Error;
+
+    fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
+        if !path.exists() {
+            return Err(Error::new(ErrorKind::NotFound, "Incorrect context path"));
+        }
+
+        let dir_path = path.display().to_string();
+        Ok(Self {
+            git_remote: None,
+            git_dir_name: None,
+            path: dir_path,
         })
     }
 }

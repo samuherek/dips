@@ -71,7 +71,7 @@ pub async fn add(config: &Settings, value: &str) {
     .await
     {
         Ok(_) => {
-            println!("Item saved: '{}'", value);
+            println!("Dip added");
         }
         Err(e) => {
             eprintln!("Failed to insert into databse: {e}");
