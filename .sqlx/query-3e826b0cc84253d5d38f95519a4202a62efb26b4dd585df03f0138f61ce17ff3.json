@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO dips (id, value, note, dir_context_id, created_at, updated_at) \n        VALUES (?, ?, ?, ?, ?, ?)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "3e826b0cc84253d5d38f95519a4202a62efb26b4dd585df03f0138f61ce17ff3"
+}

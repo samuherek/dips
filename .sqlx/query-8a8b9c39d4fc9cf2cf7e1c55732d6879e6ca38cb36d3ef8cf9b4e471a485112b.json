@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO dir_contexts (id, git_remote, git_dir_name, dir_path, created_at, updated_at)\n            VALUES (?, ?, ?, ?, ?, ?)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "8a8b9c39d4fc9cf2cf7e1c55732d6879e6ca38cb36d3ef8cf9b4e471a485112b"
+}
