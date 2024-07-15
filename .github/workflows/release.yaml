@@ -32,7 +32,7 @@ jobs:
         OS="aarch64-apple-darwin"
         TAR_FILE="${APP_NAME}-${VERSION}-${OS}.tar.gz"
         tar -czvf $TAR_FILE -C target/aarch64-apple-darwin/release $APP_NAME
-        sha256sum $TAR_FILE > ${TAR_FILE}.sha256
+        shasum -a 256 $TAR_FILE > ${TAR_FILE}.sha256
 
     - name: Upload artifact
       uses: actions/upload-artifact@v2
