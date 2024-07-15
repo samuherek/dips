@@ -54,7 +54,7 @@ jobs:
         path: .
 
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         files: |
           *.tar.gz
@@ -74,10 +74,12 @@ jobs:
         path: homebrew-tap
 
     - name: Update Homebrew Formula
+      # env:
+      #   VERSION: ${{ github.ref_name }}
       run: |
         VERSION=$(echo $GITHUB_REF_NAME | cut -c 2-)
-        MAC_ARM_URL="https://github.com/${{ github.repository }}/releases/download/$GITHUB_REF_NAME/dips-$GITHUB_REF_NAME-aarch64-apple-darwin.tar.gz"
-        MAC_ARM_SHA256=$(cat dips-$GITHUB_REF_NAME-aarch64-apple-darwin.tar.gz.sha256 | awk '{ print $1 }')
+        MAC_ARM_URL="https://github.com/${{ github.repository }}/releases/download/${VERSION}/dips-${VERSION}-aarch64-apple-darwin.tar.gz"
+        MAC_ARM_SHA256=$(cat dips-${VERSION}-aarch64-apple-darwin.tar.gz.sha256 | awk '{ print $1 }')
         FORMULA_PATH="homebrew-tap/dips.rb"
 
         sed -i '' "s|url \".*\"|url \"$MAC_ARM_URL\"|g" $FORMULA_PATH
@@ -91,3 +93,9 @@ jobs:
         git push
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # run: |
+      #   VERSION=$(echo $GITHUB_REF_NAME | cut -c 2-)
+      #   MAC_ARM_URL="https://github.com/${{ github.repository }}/releases/download/$GITHUB_REF_NAME/dips-$GITHUB_REF_NAME-aarch64-apple-darwin.tar.gz"
+      #   MAC_ARM_SHA256=$(cat dips-$GITHUB_REF_NAME-aarch64-apple-darwin.tar.gz.sha256 | awk '{ print $1 }')
+      #   FORMULA_PATH="homebrew-tap/dips.rb"
+      #   https://github.com/samuherek/dips/releases/download/v0.1.3/dips-v0.1.3-aarch64-apple-darwin.tar.gz.sha256
