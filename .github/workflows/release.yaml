@@ -97,7 +97,7 @@ jobs:
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
         git commit -am "Update dips to $VERSION"
-        git push https://github.com/${{ secrets.GH_PAT }}@github.com/samuherek/homebrew-tap.git
+        git push https://${{ secrets.GH_PAT }}@github.com/samuherek/homebrew-tap.git
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # run: |
