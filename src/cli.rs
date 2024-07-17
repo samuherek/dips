@@ -19,6 +19,7 @@ enum Commands {
         #[clap(short, long)]
         all: bool,
     },
+    Play,
 }
 
 pub async fn run() {
@@ -38,6 +39,14 @@ pub async fn run() {
                 }
                 Some(Commands::Get { all }) => {
                     commands::get::get(&configuration, all).await;
+                }
+                Some(Commands::Play) => {
+                    match commands::play::play(&configuration) {
+                        Ok(_) => {},
+                        Err(e) => {
+                            eprintln!("ERROR: game errored out: {e}");
+                        }
+                    }
                 }
                 _ => {
                     println!(

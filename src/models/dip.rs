@@ -39,7 +39,7 @@ impl DisplayDip {
         let parent = dir
             .file_name()
             .map_or("Global:".into(), |v| v.to_string_lossy());
-        format!("{}: {}", parent, self.value)
+        format!("{}: \"{}\"", parent, self.value)
     }
 }
 
@@ -72,7 +72,7 @@ pub async fn db_context_all(conn: &SqlitePool, context: &LocalContext) -> Option
         WHERE dir_contexts.dir_path LIKE ?
         "#,
     )
-        .bind(dir_path)
+    .bind(dir_path)
     .fetch_all(conn)
     .await
     {

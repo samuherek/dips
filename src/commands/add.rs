@@ -28,6 +28,7 @@ pub async fn add(config: &Settings, value: &str) {
     // We first want to find as we want to create within a transaction
     let db_ctx = dir_context::db_find_one(&db.conn, &local_ctx).await;
     let mut dir_context_id = local_ctx.id.clone();
+    let mut dir_context_path = local_ctx.dir_path.clone();
     let mut tx = db
         .conn
         .begin()
@@ -36,6 +37,7 @@ pub async fn add(config: &Settings, value: &str) {
 
     if let Some(ctx) = db_ctx {
         dir_context_id = ctx.id;
+        dir_context_path = ctx.dir_path;
     } else {
         sqlx::query!(r#"
             INSERT INTO dir_contexts (id, git_remote, git_dir_name, dir_path, created_at, updated_at)
@@ -71,7 +73,7 @@ pub async fn add(config: &Settings, value: &str) {
     .await
     {
         Ok(_) => {
-            println!("Dip added");
+            println!("Dip added to {dir_context_path} context.");
         }
         Err(e) => {
             eprintln!("Failed to insert into databse: {e}");
