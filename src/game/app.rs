@@ -1,16 +1,6 @@
+use super::ui;
 use crate::game::tui;
 use color_eyre::eyre::WrapErr;
-use ratatui::{
-    crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::Stylize,
-    symbols::border,
-    text::{Line, Text},
-    widgets::{
-        block::{Position, Title},
-        Block, Paragraph,
-    },
-};
 
 #[derive(Debug, Default)]
 enum View {
@@ -26,84 +16,22 @@ pub struct App {
     exit: bool,
 }
 
-/// # Usage
-///
-/// ```rust
-/// let rect = centered_rect(f.size(), 50, 50);
-/// ```
-fn centered_rect(r: Rect, percent_x: u16, percent_y: u16) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
-}
-
-fn comp_main_block() -> Block<'static> {
-    let title = Title::from(" Dips ".bold());
-    let instructions = Title::from(Line::from(vec![" Quit ".into(), "<Esc> ".blue().bold()]));
-
-    let block = Block::bordered()
-        .title(title.alignment(Alignment::Center))
-        .title(
-            instructions
-                .alignment(Alignment::Center)
-                .position(Position::Bottom),
-        )
-        .border_set(border::THICK);
-
-    block
-}
-
 impl App {
     /// runs the application's main loop until the user quits
     pub fn run(&mut self, terminal: &mut tui::Tui) -> color_eyre::Result<()> {
         while !self.exit {
-            terminal.draw(|frame| {
-                let area = centered_rect(frame.size(), 75, 75);
-                let input = Text::from(vec![Line::from(vec![self.input.clone().into()])]);
-                let block = comp_main_block();
-
-                frame.render_widget(Paragraph::new(input).block(block), area);
-                frame.set_cursor(area.x + (self.input_cursor_index as u16) + 1, area.y + 1);
-            })?;
-
-            self.handle_events().wrap_err("handle events failed")?;
+            let _ = ui::render(terminal, self);
+            let _ = ui::handle_events(self).wrap_err("handle events failed")?;
         }
         Ok(())
     }
 
-    /// updates the application's state based on user input
-    fn handle_events(&mut self) -> color_eyre::Result<()> {
-        match event::read()? {
-            // it's important to check that the event is a key press event as
-            // crossterm also emits key release and repeat events on Windows.
-            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => self
-                .handle_key_event(key_event)
-                .wrap_err_with(|| format!("handling key event failed: \n{key_event:#?}")),
-            _ => Ok(()),
-        }
+    pub fn input(&self) -> String {
+        self.input.clone()
     }
 
-    fn handle_key_event(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
-        match key_event.code {
-            KeyCode::Esc => self.exit(),
-            KeyCode::Char(c) => self.enter_char(c),
-            _ => {}
-        }
-        Ok(())
+    pub fn input_cursor_position(&self, x: u16, y: u16) -> (u16, u16) {
+        (x + self.input_cursor_index as u16 + 1, y + 1)
     }
 
     fn move_cursor_left(&mut self) {
@@ -120,7 +48,7 @@ impl App {
         new_cursor_pos.clamp(0, self.input.chars().count())
     }
 
-    fn enter_char(&mut self, c: char) {
+    pub fn enter_char(&mut self, c: char) {
         let index = self.byte_index();
         self.input.insert(index, c);
         self.move_cursor_right();
@@ -138,7 +66,29 @@ impl App {
             .unwrap_or(self.input.len())
     }
 
-    fn exit(&mut self) {
+    pub fn delete_char(&mut self) {
+        let is_not_cursor_leftmost = self.input_cursor_index != 0;
+        if is_not_cursor_leftmost {
+            // Method "remove" is not used on the saved text for deleting the selected char.
+            // Reason: Using remove on String works on bytes instead of the chars.
+            // Using remove would require special care because of char boundaries.
+
+            let current_index = self.input_cursor_index;
+            let from_left_to_current_index = current_index - 1;
+
+            // Getting all characters before the selected character.
+            let before_char_to_delete = self.input.chars().take(from_left_to_current_index);
+            // Getting all characters after selected character.
+            let after_char_to_delete = self.input.chars().skip(current_index);
+
+            // Put all characters together except the selected one.
+            // By leaving the selected one out, it is forgotten and therefore deleted.
+            self.input = before_char_to_delete.chain(after_char_to_delete).collect();
+            self.move_cursor_left();
+        }
+    }
+
+    pub fn exit(&mut self) {
         self.exit = true;
     }
 }
