@@ -1,22 +1,70 @@
 use crate::game::tui;
-use color_eyre::eyre::{bail, WrapErr};
+use color_eyre::eyre::WrapErr;
 use ratatui::{
-    buffer::Buffer,
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
-    layout::{Alignment, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::Stylize,
     symbols::border,
     text::{Line, Text},
     widgets::{
         block::{Position, Title},
-        Block, Paragraph, Widget,
+        Block, Paragraph,
     },
-    Frame,
 };
 
 #[derive(Debug, Default)]
+enum View {
+    #[default]
+    INPUT,
+}
+
+#[derive(Debug, Default)]
 pub struct App {
+    input: String,
+    input_cursor_index: usize,
+    view: View,
     exit: bool,
+}
+
+/// # Usage
+///
+/// ```rust
+/// let rect = centered_rect(f.size(), 50, 50);
+/// ```
+fn centered_rect(r: Rect, percent_x: u16, percent_y: u16) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+fn comp_main_block() -> Block<'static> {
+    let title = Title::from(" Dips ".bold());
+    let instructions = Title::from(Line::from(vec![" Quit ".into(), "<Esc> ".blue().bold()]));
+
+    let block = Block::bordered()
+        .title(title.alignment(Alignment::Center))
+        .title(
+            instructions
+                .alignment(Alignment::Center)
+                .position(Position::Bottom),
+        )
+        .border_set(border::THICK);
+
+    block
 }
 
 impl App {
@@ -24,30 +72,12 @@ impl App {
     pub fn run(&mut self, terminal: &mut tui::Tui) -> color_eyre::Result<()> {
         while !self.exit {
             terminal.draw(|frame| {
-                let title = Title::from(" Counter App Tutorial ".bold());
-                let instructions = Title::from(Line::from(vec![
-                    " Decrement ".into(),
-                    "<Left>".blue().bold(),
-                    " Increment ".into(),
-                    "<Right>".blue().bold(),
-                    " Quit ".into(),
-                    "<Q> ".blue().bold(),
-                ]));
-                let block = Block::bordered()
-                    .title(title.alignment(Alignment::Center))
-                    .title(
-                        instructions
-                            .alignment(Alignment::Center)
-                            .position(Position::Bottom),
-                    )
-                    .border_set(border::THICK);
+                let area = centered_rect(frame.size(), 75, 75);
+                let input = Text::from(vec![Line::from(vec![self.input.clone().into()])]);
+                let block = comp_main_block();
 
-                let counter_text = Text::from(vec![Line::from(vec!["Value: ".into()])]);
-
-                frame.render_widget(
-                    Paragraph::new(counter_text).centered().block(block),
-                    frame.size(),
-                );
+                frame.render_widget(Paragraph::new(input).block(block), area);
+                frame.set_cursor(area.x + (self.input_cursor_index as u16) + 1, area.y + 1);
             })?;
 
             self.handle_events().wrap_err("handle events failed")?;
@@ -69,10 +99,43 @@ impl App {
 
     fn handle_key_event(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
         match key_event.code {
-            KeyCode::Char('q') => self.exit(),
+            KeyCode::Esc => self.exit(),
+            KeyCode::Char(c) => self.enter_char(c),
             _ => {}
         }
         Ok(())
+    }
+
+    fn move_cursor_left(&mut self) {
+        let cursor_moved_left = self.input_cursor_index.saturating_sub(1);
+        self.input_cursor_index = self.clamp_cursor(cursor_moved_left);
+    }
+
+    fn move_cursor_right(&mut self) {
+        let cursor_moved_right = self.input_cursor_index.saturating_add(1);
+        self.input_cursor_index = self.clamp_cursor(cursor_moved_right);
+    }
+
+    fn clamp_cursor(&self, new_cursor_pos: usize) -> usize {
+        new_cursor_pos.clamp(0, self.input.chars().count())
+    }
+
+    fn enter_char(&mut self, c: char) {
+        let index = self.byte_index();
+        self.input.insert(index, c);
+        self.move_cursor_right();
+    }
+
+    /// Returns the byte index based on the character position.
+    ///
+    /// Since each character in a string can be contain multiple bytes, it's necessary to calculate
+    /// the byte index based on the index of the character.
+    fn byte_index(&mut self) -> usize {
+        self.input
+            .char_indices()
+            .map(|(i, _)| i)
+            .nth(self.input_cursor_index)
+            .unwrap_or(self.input.len())
     }
 
     fn exit(&mut self) {

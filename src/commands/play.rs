@@ -9,4 +9,3 @@ pub fn play(_config: &Settings) -> color_eyre::Result<()> {
     tui::restore()?;
     Ok(())
 }
-
