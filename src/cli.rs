@@ -40,19 +40,16 @@ pub async fn run() {
                 Some(Commands::Get { all }) => {
                     commands::get::get(&configuration, all).await;
                 }
-                Some(Commands::Play) => {
-                    match commands::play::play(&configuration) {
-                        Ok(_) => {},
-                        Err(e) => {
-                            eprintln!("ERROR: game errored out: {e}");
-                        }
+                Some(Commands::Play) => match commands::play::play(&configuration) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("ERROR: game errored out: {e}");
                     }
-                }
+                },
                 _ => {
                     println!(
                         "Incorrect usage of dips. Please check the help section with 'dips help'"
                     );
-                    std::process::exit(0);
                 }
             }
         }
