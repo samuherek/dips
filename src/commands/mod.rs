@@ -1,4 +1,5 @@
 pub mod add;
-pub mod init;
 pub mod get;
+pub mod init;
 pub mod play;
+pub mod recipe;
