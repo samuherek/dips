@@ -68,8 +68,8 @@ impl TryFrom<PathBuf> for LocalContext {
 pub async fn db_find_one(conn: &SqlitePool, ctx: &DirContext) -> Option<DirContext> {
     match sqlx::query_as!(
         DirContext,
-        "SELECT * FROM dir_contexts WHERE id = ?",
-        ctx.id
+        "SELECT * FROM dir_contexts WHERE dir_path = ?",
+        ctx.dir_path
     )
     .fetch_optional(conn)
     .await
