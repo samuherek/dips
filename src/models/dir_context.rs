@@ -34,7 +34,9 @@ pub async fn get_or_create_current(
     let current_path = std::env::current_dir()?;
     let curr_path_string = current_path.display().to_string();
     let dir_context = match git::git_repository(&current_path) {
-        Some(repo) => db_find_or_create(tx, &curr_path_string, repo.dir_name(), repo.remote).await,
+        Some(repo) => {
+            db_find_or_create(tx, &curr_path_string, Some(repo.dir_name), repo.remote).await
+        }
         None => db_find_or_create(tx, &curr_path_string, None, None).await,
     }?;
     Ok(dir_context)

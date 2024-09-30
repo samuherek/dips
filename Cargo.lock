@@ -481,6 +481,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "deunicode"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "339544cc9e2c4dc3fc7149fd630c5f22263a4fdf18a98afd0075784968b5cf00"
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -502,13 +508,16 @@ dependencies = [
  "color-eyre",
  "config",
  "dirs",
+ "fake",
  "fuzzy-matcher",
  "git2",
+ "rand",
  "ratatui",
  "serde",
  "serde_json",
  "serde_yaml",
  "sqlx",
+ "tempfile",
  "tokio",
  "uuid",
 ]
@@ -599,6 +608,16 @@ checksum = "7cd915d99f24784cdc19fd37ef22b97e3ff0ae756c7e492e9fbfe897d61e2aec"
 dependencies = [
  "indenter",
  "once_cell",
+]
+
+[[package]]
+name = "fake"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d391ba4af7f1d93f01fcf7b2f29e2bc9348e109dfdbf4dcbdc51dfa38dab0b6"
+dependencies = [
+ "deunicode",
+ "rand",
 ]
 
 [[package]]

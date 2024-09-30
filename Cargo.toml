@@ -28,3 +28,8 @@ serde_yaml = "0.9.34"
 sqlx = { version = "0.7.4", features = ["macros", "uuid", "chrono", "migrate", "sqlite", "runtime-tokio-rustls"]}
 tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1.10.0", features = ["v4"] }
+
+[dev-dependencies]
+fake = "2.10.0"
+rand = "0.8.5"
+tempfile = "3.13.0"
