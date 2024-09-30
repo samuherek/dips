@@ -1,5 +1,5 @@
 use crate::commands;
-use crate::configuration;
+use crate::configuration::{Application, ConfigError, Environment, Settings};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -29,26 +29,34 @@ enum Commands {
 
 pub async fn run() {
     let cli = Cli::parse();
+    let settings = Settings::build(&Environment::current());
 
     match cli.command {
         Some(Commands::Init) => {
-            commands::init::init().await;
+            commands::init::init(settings).await;
         }
         _ => {
-            let configuration =
-                configuration::get_configuration().expect("Failed to load configuration.");
+            let app = match Application::build(settings).await {
+                Ok(app) => app,
+                Err(e) => match e {
+                    ConfigError::Uninitialized => {
+                        println!("Dips is not initialized. Please run `dips init`");
+                        std::process::exit(0);
+                    }
+                },
+            };
 
             match cli.command {
                 Some(Commands::Add { input, group }) => {
-                    commands::add::add(&configuration, &input, &group).await;
+                    commands::add::add(&app, &input, &group).await;
                 }
                 Some(Commands::Get { all }) => {
-                    commands::get::get(&configuration, all).await;
+                    commands::get::get(&app, all).await;
                 }
                 Some(Commands::Recipe { input }) => {
-                    commands::recipe::recipe(&configuration, input).await;
+                    commands::recipe::recipe(&app, input).await;
                 }
-                Some(Commands::Play) => match commands::play::play(&configuration) {
+                Some(Commands::Play) => match commands::play::play(&app) {
                     Ok(_) => {}
                     Err(e) => {
                         eprintln!("ERROR: game errored out: {e}");

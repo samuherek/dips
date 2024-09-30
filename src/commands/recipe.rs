@@ -1,3 +1,4 @@
+use crate::configuration::Application;
 use crate::configuration::Settings;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
@@ -40,7 +41,7 @@ fn get_recipe_list(search: Option<String>) -> Vec<String> {
     items
 }
 
-pub async fn recipe(config: &Settings, input: Option<String>) {
+pub async fn recipe(_app: &Application, input: Option<String>) {
     let dirs = get_recipe_list(input);
     for dir in dirs {
         println!("{dir}");

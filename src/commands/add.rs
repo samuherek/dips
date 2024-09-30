@@ -1,5 +1,4 @@
-use crate::configuration::Settings;
-use crate::database::Database;
+use crate::configuration::Application;
 use crate::models::context_group;
 use crate::models::{dip, dir_context};
 use sqlx::SqlitePool;
@@ -12,16 +11,14 @@ async fn value_exists(conn: &SqlitePool, value: &str) -> bool {
         .is_some()
 }
 
-pub async fn add(config: &Settings, value: &str, group: &Option<String>) {
-    let db = Database::connect(config).await;
-
+pub async fn add(app: &Application, value: &str, group: &Option<String>) {
     // TODO: we should check the existance of the value based on dir context
     // if value_exists(&db.conn, value).await {
     //     println!("This item already eixsts.");
     //     std::process::exit(0);
     // }
-    let mut tx = db
-        .conn
+    let mut tx = app
+        .db_pool
         .begin()
         .await
         .expect("Failed to start transaction in sqlite");

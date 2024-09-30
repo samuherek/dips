@@ -518,6 +518,7 @@ dependencies = [
  "serde_yaml",
  "sqlx",
  "tempfile",
+ "thiserror",
  "tokio",
  "uuid",
 ]

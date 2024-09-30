@@ -11,6 +11,7 @@ pub struct GitRepository {
 pub fn git_repository(path: &Path) -> Option<GitRepository> {
     match Repository::discover(path) {
         Ok(repo) => {
+            // By default, it retunrs the ".git" dir and we are after the parent dir
             let path = repo.path().parent().unwrap().to_path_buf();
             let dir_name = path
                 .file_name()
