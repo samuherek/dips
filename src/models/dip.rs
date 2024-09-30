@@ -36,7 +36,7 @@ impl Dip {
 
 #[derive(serde::Deserialize, sqlx::FromRow, Debug)]
 pub struct DisplayDip {
-    value: String,
+    pub value: String,
     dir_path: String,
 }
 

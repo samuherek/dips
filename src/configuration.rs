@@ -39,6 +39,7 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// Build the settings from possible different sources
     pub fn build(env: &Environment) -> Self {
         let database = DatabaseSettings::build(env);
         Self { database }
@@ -57,11 +58,12 @@ pub struct DatabaseSettings {
     /// Expect the path to be something along the lines of:
     /// - sqlite:///absolute/path/to/db.sqlite
     /// - sqlite://relative/path/to/db.sqlite
-    /// - sqlite://memory:
+    /// - sqlite://:memory:
     pub path: String,
 }
 
 impl DatabaseSettings {
+    /// Build the database settings from all available configs
     pub fn build(env: &Environment) -> Self {
         let path = match env {
             Environment::Development => DB_NAME.to_string(),
@@ -83,6 +85,7 @@ impl DatabaseSettings {
 /// This struct is dedicated to the application global values
 /// that are shared across different functions.
 /// It holds all the initialized objects like the database pool.
+#[derive(Debug)]
 pub struct Application {
     pub db_pool: SqlitePool,
 }
@@ -90,20 +93,25 @@ pub struct Application {
 impl Application {
     pub async fn build(config: Settings) -> Result<Self, ConfigError> {
         let db_pool = get_database_connection(&config).await?;
-            migrate_database(&db_pool)
-        .await
-        .expect("Failed to initialize database");
-
+        migrate_database(&db_pool)
+            .await
+            .expect("Failed to initialize database");
 
         Ok(Self { db_pool })
     }
 }
 
+/// Exclusivelly get the connetion to the database.
 async fn get_database_connection(config: &Settings) -> Result<SqlitePool, ConfigError> {
-    let database_path = Path::new(&config.database.path);
-    if !database_path.exists() {
-        return Err(ConfigError::Uninitialized);
-        // std::fs::File::create(database_path).expect("Failed to create database file.");
+    // TODO: Not sure if this is the right way to do this, but at the moment
+    // we don't support custom setup, so we hardcode this value.
+    // When we support custom setup for the database, the desting in memory
+    // database will need to be rethoguth.
+    if !config.database.path.contains(":memory:") {
+        let database_path = Path::new(&config.database.path);
+        if !database_path.exists() {
+            return Err(ConfigError::Uninitialized);
+        }
     }
 
     let db_pool = SqlitePool::connect(&config.database.connection_string())
@@ -113,6 +121,7 @@ async fn get_database_connection(config: &Settings) -> Result<SqlitePool, Config
     Ok(db_pool)
 }
 
+/// Specific function to migrate the already established connection
 pub async fn migrate_database(conn: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query("PRAGMA foreign_keys = ON;")
         .execute(conn)

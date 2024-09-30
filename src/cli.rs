@@ -1,6 +1,6 @@
 use crate::commands;
 use crate::configuration::{Application, ConfigError, Environment, Settings};
-use clap::{Parser, Subcommand};
+use clap::{Command, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -63,6 +63,7 @@ pub async fn run() {
                     }
                 },
                 _ => {
+                    // TODO: figure out how to programatically trigger help in clap
                     println!(
                         "Incorrect usage of dips. Please check the help section with 'dips help'"
                     );

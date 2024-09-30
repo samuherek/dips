@@ -1,16 +1,31 @@
-use dips::configuration::get_configuration;
-use sqlx::SqlitePool;
-use std::path::PathBuf;
+use dips::configuration::{Application, Environment, Settings};
 
+#[derive(Debug)]
 pub struct TestApp {
-    db_pool: SqlitePool,
-    src_path: PathBuf,
+    src_path: tempfile::TempDir,
+    application: Application,
 }
 
-pub async fn setup_app() -> () {
-    let config = get_configuration();
-    println!("config {:?}", config);
-    // TestApp {
-    //
-    // }
+impl TestApp {
+    pub async fn setup() -> Self {
+        let settings = {
+            let mut s = Settings::build(&Environment::current());
+            s.database.path = "sqlite::memory:".to_string();
+            s
+        };
+        let application = Application::build(settings)
+            .await
+            .expect("Failed to build the application.");
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create a temp directory.");
+
+        println!("config {:?}", "hey");
+        TestApp {
+            application,
+            src_path: temp_dir,
+        }
+    }
+
+    pub fn application(&self) -> &Application {
+        &self.application
+    }
 }
