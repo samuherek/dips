@@ -14,6 +14,8 @@ enum Commands {
     Init,
     Add {
         input: String,
+        #[arg(short, long)]
+        group: Option<String>,
     },
     Get {
         #[clap(short, long)]
@@ -37,8 +39,8 @@ pub async fn run() {
                 configuration::get_configuration().expect("Failed to load configuration.");
 
             match cli.command {
-                Some(Commands::Add { input }) => {
-                    commands::add::add(&configuration, &input).await;
+                Some(Commands::Add { input, group }) => {
+                    commands::add::add(&configuration, &input, &group).await;
                 }
                 Some(Commands::Get { all }) => {
                     commands::get::get(&configuration, all).await;

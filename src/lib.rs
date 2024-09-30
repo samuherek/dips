@@ -5,3 +5,4 @@ mod database;
 mod game;
 mod models;
 mod ghi;
+pub mod git;

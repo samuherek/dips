@@ -1,5 +1,5 @@
 use crate::models::dir_context::LocalContext;
-use sqlx::SqlitePool;
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
 #[derive(serde::Serialize, serde::Deserialize, sqlx::FromRow, Debug)]
 pub struct Dip {
@@ -7,12 +7,18 @@ pub struct Dip {
     pub value: String,
     pub note: Option<String>,
     pub dir_context_id: String,
+    pub context_group_id: Option<String>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
 }
 
 impl Dip {
-    pub fn new(context_id: &str, value: &str, note: Option<&str>) -> Self {
+    pub fn new(
+        context_id: &str,
+        value: &str,
+        note: Option<&str>,
+        context_group_id: Option<&str>,
+    ) -> Self {
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().date_naive().into();
         let note = note.map(|v| v.to_string());
@@ -21,6 +27,7 @@ impl Dip {
             value: value.into(),
             note,
             dir_context_id: context_id.into(),
+            context_group_id: context_group_id.map(String::from),
             created_at: now,
             updated_at: now,
         }
@@ -82,4 +89,31 @@ pub async fn db_context_all(conn: &SqlitePool, context: &LocalContext) -> Option
             None
         }
     }
+}
+
+pub async fn create(
+    tx: &mut Transaction<'_, Sqlite>,
+    dir_context_id: &str,
+    value: &str,
+    note: Option<&str>,
+    context_group_id: Option<&str>,
+) -> Result<Dip, sqlx::Error> {
+    let item = Dip::new(dir_context_id, value, note, context_group_id);
+    println!("new dip will be {:?}", item);
+    let _ = sqlx::query!(
+        r#"
+        insert into dips(id, value, note, created_at, updated_at, context_group_id, dir_context_id)
+        values($1, $2, $3, $4, $4, $5, $6)
+        "#,
+        item.id,
+        item.value,
+        item.note,
+        item.created_at,
+        item.context_group_id,
+        item.dir_context_id
+    )
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(item)
 }
