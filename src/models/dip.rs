@@ -1,4 +1,4 @@
-use crate::models::dir_context::LocalContext;
+use crate::models::dir_context::RuntimeDirContext;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 #[derive(serde::Serialize, serde::Deserialize, sqlx::FromRow, Debug)]
@@ -40,6 +40,21 @@ pub struct DisplayDip {
     dir_path: String,
 }
 
+#[derive(serde::Deserialize, sqlx::FromRow, Debug)]
+pub struct DipRowFull {
+    pub id: String,
+    pub value: String,
+    pub note: Option<String>,
+    pub dir_context_id: String,
+    pub context_group_id: Option<String>,
+    pub created_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::NaiveDateTime,
+    pub git_remote: Option<String>,
+    pub git_dir_name: Option<String>,
+    pub dir_path: String,
+    pub context_group_name: Option<String>,
+}
+
 impl DisplayDip {
     pub fn format(&self) -> String {
         let dir = std::path::PathBuf::from(&self.dir_path);
@@ -48,6 +63,23 @@ impl DisplayDip {
             .map_or("Global:".into(), |v| v.to_string_lossy());
         format!("{}: \"{}\"", parent, self.value)
     }
+}
+
+pub async fn get_all(conn: &SqlitePool) -> Result<Vec<DipRowFull>, sqlx::Error> {
+    sqlx::query_as(
+        r#"
+       select dips.*, 
+            dir_contexts.dir_path, 
+            dir_contexts.git_remote, 
+            dir_contexts.git_dir_name, 
+            context_groups.name as context_group_name
+       from dips 
+       join dir_contexts on dips.dir_context_id = dir_contexts.id
+       left join context_groups on dips.context_group_id = context_groups.id
+       "#,
+    )
+    .fetch_all(conn)
+    .await
 }
 
 pub async fn db_all(conn: &SqlitePool) -> Option<Vec<DisplayDip>> {
@@ -69,7 +101,7 @@ pub async fn db_all(conn: &SqlitePool) -> Option<Vec<DisplayDip>> {
     }
 }
 
-pub async fn db_context_all(conn: &SqlitePool, context: &LocalContext) -> Option<Vec<DisplayDip>> {
+pub async fn db_context_all(conn: &SqlitePool, context: &RuntimeDirContext) -> Option<Vec<DisplayDip>> {
     let dir_path = format!("{}%", context.path());
     match sqlx::query_as(
         r#"

@@ -1,8 +1,10 @@
 use dips::configuration::{Application, Environment, Settings};
+use dips::models::dir_context::RuntimeDirContext;
 
 #[derive(Debug)]
 pub struct TestApp {
-    src_path: tempfile::TempDir,
+    temp_dir: tempfile::TempDir,
+    context_dir: RuntimeDirContext,
     application: Application,
 }
 
@@ -17,11 +19,14 @@ impl TestApp {
             .await
             .expect("Failed to build the application.");
         let temp_dir = tempfile::TempDir::new().expect("Failed to create a temp directory.");
+        let context_dir = RuntimeDirContext::try_from(temp_dir.path())
+            .expect("Failed to determine context from temp dir");
 
         println!("config {:?}", "hey");
         TestApp {
             application,
-            src_path: temp_dir,
+            context_dir,
+            temp_dir,
         }
     }
 

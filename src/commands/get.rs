@@ -7,7 +7,7 @@ pub async fn get(app: &Application, all: bool) {
         dip::db_all(&app.db_pool).await
     } else {
         let current_dir = std::env::current_dir().expect("Failed to read current directory");
-        let current_context = dir_context::LocalContext::try_from(current_dir)
+        let current_context = dir_context::RuntimeDirContext::try_from(current_dir)
             .expect("Failed to establish local context.");
         dip::db_context_all(&app.db_pool, &current_context).await
     };

@@ -1,3 +1,4 @@
+use crate::models::dir_context::RuntimeDirContext;
 use sqlx::SqlitePool;
 use std::path::Path;
 
@@ -88,16 +89,23 @@ impl DatabaseSettings {
 #[derive(Debug)]
 pub struct Application {
     pub db_pool: SqlitePool,
+    context_dir: RuntimeDirContext,
 }
 
 impl Application {
     pub async fn build(config: Settings) -> Result<Self, ConfigError> {
+        let curr_path = std::env::current_dir().expect("Failed to read the current directory.");
         let db_pool = get_database_connection(&config).await?;
         migrate_database(&db_pool)
             .await
             .expect("Failed to initialize database");
+        let context_dir =
+            RuntimeDirContext::try_from(curr_path).expect("Failed to identify current context");
 
-        Ok(Self { db_pool })
+        Ok(Self {
+            db_pool,
+            context_dir,
+        })
     }
 }
 

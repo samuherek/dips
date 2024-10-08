@@ -1,7 +1,7 @@
 use crate::git;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 use std::io::{Error, ErrorKind};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(serde::Deserialize, sqlx::FromRow, Debug)]
 pub struct DirContext {
@@ -43,30 +43,64 @@ pub async fn get_or_create_current(
 }
 
 #[derive(Debug)]
-pub struct LocalContext {
+pub struct RuntimeDirContext {
     git_remote: Option<String>,
     git_dir_name: Option<String>,
+    git_dir_path: Option<PathBuf>,
     path: String,
 }
 
-impl LocalContext {
+impl RuntimeDirContext {
     pub fn path(&self) -> String {
         self.path.to_string()
     }
 }
 
-impl TryFrom<PathBuf> for LocalContext {
+impl TryFrom<&Path> for RuntimeDirContext {
     type Error = Error;
 
-    fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
+    fn try_from(path: &Path) -> Result<Self, Self::Error> {
+        let (git_remote, git_dir_name, git_dir_path) =
+            if let Some(repo) = git::git_repository(&path) {
+                (repo.remote, Some(repo.dir_name), Some(repo.path))
+            } else {
+                (None, None, None)
+            };
+
         if !path.exists() {
             return Err(Error::new(ErrorKind::NotFound, "Incorrect context path"));
         }
 
         let dir_path = path.display().to_string();
         Ok(Self {
-            git_remote: None,
-            git_dir_name: None,
+            git_remote,
+            git_dir_name,
+            git_dir_path,
+            path: dir_path,
+        })
+    }
+}
+
+impl TryFrom<PathBuf> for RuntimeDirContext {
+    type Error = Error;
+
+    fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
+        let (git_remote, git_dir_name, git_dir_path) =
+            if let Some(repo) = git::git_repository(&path) {
+                (repo.remote, Some(repo.dir_name), Some(repo.path))
+            } else {
+                (None, None, None)
+            };
+
+        if !path.exists() {
+            return Err(Error::new(ErrorKind::NotFound, "Incorrect context path"));
+        }
+
+        let dir_path = path.display().to_string();
+        Ok(Self {
+            git_remote,
+            git_dir_name,
+            git_dir_path,
             path: dir_path,
         })
     }
