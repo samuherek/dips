@@ -1,11 +1,12 @@
 use color_eyre::{config::HookBuilder, eyre};
 use ratatui::{
     backend::CrosstermBackend,
+    ::Show,
     crossterm::{
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     },
-     Terminal,
+    Terminal,
 };
 use std::io::{stdout, Stdout};
 use std::panic;
