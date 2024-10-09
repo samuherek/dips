@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            select d.id from dips d\n            left join dir_contexts c on d.dir_context_id = c.id\n            left join context_groups g on d.context_group_id = g.id\n            where d.value = $1\n              and (\n                  (d.dir_context_id IS NOT NULL and (c.dir_path = $2 or c.git_remote = $3 or c.git_dir_name = $4))\n                  or \n                  (d.dir_context_id IS NULL and $5)\n              )\n              and (\n                  (d.context_group_id IS NOT NULL and g.name = $6)\n                  or \n                  (d.context_group_id IS NULL and $6 IS NULL)\n              )\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "af73dc7313e03dbb2cd67e1ad2dfef383cf949cf1c1d937baf7204a73e54785f"
+}

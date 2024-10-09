@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT * FROM dir_contexts WHERE id = ?",
+  "query": "SELECT * FROM dir_contexts WHERE dir_path = $1 OR git_remote = $2 OR git_dir_name = $3",
   "describe": {
     "columns": [
       {
@@ -35,7 +35,7 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 3
     },
     "nullable": [
       false,
@@ -46,5 +46,5 @@
       false
     ]
   },
-  "hash": "3c2d62426b09e68c822313ec1a7160809e909ad1738aacf00613038f58146668"
+  "hash": "00514036b674b30537cb85dea050c9235a8df2729aa5bb1a4f46dbcf1015c5f6"
 }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        insert into context_groups (id, name, dir_context_id, created_at)\n        values ($1, $2, $3, $4)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "03cf57b82311fcef1a9d34150a7e30c5bdc2e12ff89c60756b8e00eb39ce3f69"
+}
