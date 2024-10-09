@@ -1,10 +1,5 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
-/// # Usage
-///
-/// ```rust
-/// let rect = centered_rect(f.size(), 50, 50);
-/// ```
 pub fn centered_rect(r: Rect, percent_x: u16, percent_y: u16) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)

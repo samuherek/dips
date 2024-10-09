@@ -1,7 +1,7 @@
 use color_eyre::{config::HookBuilder, eyre};
+// use ratatui::Show;
 use ratatui::{
     backend::CrosstermBackend,
-    ::Show,
     crossterm::{
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
