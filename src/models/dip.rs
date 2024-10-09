@@ -45,7 +45,7 @@ pub struct DipRowFull {
     pub id: String,
     pub value: String,
     pub note: Option<String>,
-    pub dir_context_id: String,
+    pub dir_context_id: Option<String>,
     pub context_group_id: Option<String>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
@@ -74,7 +74,7 @@ pub async fn get_all(conn: &SqlitePool) -> Result<Vec<DipRowFull>, sqlx::Error> 
             dir_contexts.git_dir_name, 
             context_groups.name as context_group_name
        from dips 
-       join dir_contexts on dips.dir_context_id = dir_contexts.id
+       left join dir_contexts on dips.dir_context_id = dir_contexts.id
        left join context_groups on dips.context_group_id = context_groups.id
        "#,
     )
@@ -150,5 +150,24 @@ pub async fn create(
     .execute(&mut **tx)
     .await?;
 
+    Ok(item)
+}
+
+pub async fn find_one(
+    pool: &SqlitePool,
+    value: &str,
+    dir_context_id: Option<&str>,
+    context_group_id: Option<&str>,
+) -> Result<Option<Dip>, sqlx::Error> {
+    let item = sqlx::query_as(
+        r"
+        select * from dips where value = $1 and dir_context_id = $2 and context_group_id = $3
+        ",
+    )
+    .bind(value)
+    .bind(dir_context_id)
+    .bind(context_group_id)
+    .fetch_optional(pool)
+    .await?;
     Ok(item)
 }

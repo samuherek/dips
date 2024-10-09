@@ -54,7 +54,7 @@ pub async fn run() {
                     group,
                     global,
                 }) => {
-                    commands::add::add(&app, &input, &group, global).await;
+                    commands::add::add(&app, &input, group.as_deref(), global).await;
                 }
                 Some(Commands::Get { all }) => {
                     commands::get::get(&app, all).await;

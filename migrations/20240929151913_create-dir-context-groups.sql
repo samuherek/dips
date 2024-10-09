@@ -1,7 +1,7 @@
 -- Add migration script here
 CREATE TABLE context_groups (
     id text not null primary key,
-    name text not null unique,
+    name text not null,
     created_at timestamp not null,
     dir_context_id text,
     constraint fk_dir_context

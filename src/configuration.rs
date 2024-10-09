@@ -89,7 +89,7 @@ impl DatabaseSettings {
 #[derive(Debug)]
 pub struct Application {
     pub db_pool: SqlitePool,
-    context_dir: RuntimeDirContext,
+    pub context_dir: RuntimeDirContext,
 }
 
 impl Application {

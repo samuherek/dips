@@ -47,12 +47,20 @@ pub struct RuntimeDirContext {
     git_remote: Option<String>,
     git_dir_name: Option<String>,
     git_dir_path: Option<PathBuf>,
-    path: String,
+    path: PathBuf,
 }
 
 impl RuntimeDirContext {
     pub fn path(&self) -> String {
-        self.path.to_string()
+        self.path.to_string_lossy().to_string()
+    }
+
+    pub fn git_dir(&self) -> Option<&str> {
+        self.git_dir_name.as_deref()
+    }
+
+    pub fn git_remote(&self) -> Option<&str> {
+        self.git_remote.as_deref()
     }
 }
 
@@ -71,12 +79,11 @@ impl TryFrom<&Path> for RuntimeDirContext {
             return Err(Error::new(ErrorKind::NotFound, "Incorrect context path"));
         }
 
-        let dir_path = path.display().to_string();
         Ok(Self {
             git_remote,
             git_dir_name,
             git_dir_path,
-            path: dir_path,
+            path: PathBuf::from(path),
         })
     }
 }
@@ -96,12 +103,11 @@ impl TryFrom<PathBuf> for RuntimeDirContext {
             return Err(Error::new(ErrorKind::NotFound, "Incorrect context path"));
         }
 
-        let dir_path = path.display().to_string();
         Ok(Self {
             git_remote,
             git_dir_name,
             git_dir_path,
-            path: dir_path,
+            path,
         })
     }
 }
