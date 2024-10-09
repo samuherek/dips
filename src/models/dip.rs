@@ -134,7 +134,6 @@ pub async fn create(
     context_group_id: Option<&str>,
 ) -> Result<Dip, sqlx::Error> {
     let item = Dip::new(dir_context_id, value, note, context_group_id);
-    println!("new dip will be {:?}", item);
     let _ = sqlx::query!(
         r#"
         insert into dips(id, value, note, created_at, updated_at, context_group_id, dir_context_id)

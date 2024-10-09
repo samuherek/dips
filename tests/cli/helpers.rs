@@ -22,7 +22,6 @@ impl TestApp {
         let context_dir = RuntimeDirContext::try_from(temp_dir.path())
             .expect("Failed to determine context from temp dir");
 
-        println!("config {:?}", "hey");
         TestApp {
             application,
             context_dir,

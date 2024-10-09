@@ -143,8 +143,7 @@ pub async fn db_create(
     git_remote: Option<String>,
 ) -> Result<DirContext, sqlx::Error> {
     let dir_context = DirContext::new(dir_path, git_dir_name, git_remote);
-    println!("dir context to be {:?}", dir_context);
-    let res = sqlx::query!(
+    sqlx::query!(
         r#"
         insert into dir_contexts(
             id, dir_path, git_remote, git_dir_name, created_at, updated_at
@@ -160,7 +159,6 @@ pub async fn db_create(
     )
     .execute(&mut **tx)
     .await?;
-    println!("this is the res from the dir context insert {:?}", res);
     // TODO: if res.rows_affected() == 1
     Ok(dir_context)
 }

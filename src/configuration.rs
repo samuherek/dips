@@ -26,7 +26,7 @@ impl Environment {
         }
         #[cfg(not(debug_assertions))]
         {
-            return Environment::Production(dir);
+            return Environment::Production;
         }
     }
 }
@@ -70,6 +70,7 @@ impl DatabaseSettings {
             Environment::Development => DB_NAME.to_string(),
             Environment::Production => dirs::home_dir()
                 .expect("Failed to find home directory")
+                .join(".dips")
                 .join(DB_NAME)
                 .display()
                 .to_string(),
