@@ -1,9 +1,9 @@
 use crate::commands;
 use crate::configuration::{Application, ConfigError, Environment, Settings};
-use clap::{Command, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(version, about, long_about = None)]
+#[command(version, about, long_about = None, arg_required_else_help(true))]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -14,8 +14,10 @@ enum Commands {
     Init,
     Add {
         input: String,
-        #[arg(short, long)]
+        #[arg(short = 't', long)]
         group: Option<String>,
+        #[arg(short, long)]
+        global: bool,
     },
     Get {
         #[clap(short, long)]
@@ -47,8 +49,12 @@ pub async fn run() {
             };
 
             match cli.command {
-                Some(Commands::Add { input, group }) => {
-                    commands::add::add(&app, &input, &group).await;
+                Some(Commands::Add {
+                    input,
+                    group,
+                    global,
+                }) => {
+                    commands::add::add(&app, &input, &group, global).await;
                 }
                 Some(Commands::Get { all }) => {
                     commands::get::get(&app, all).await;

@@ -2,5 +2,5 @@ use dips::cli;
 
 #[tokio::main]
 async fn main() {
-    cli::run();
+    cli::run().await;
 }

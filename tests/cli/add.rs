@@ -9,7 +9,7 @@ async fn adding_new_value_should_be_added() {
     let setup = TestApp::setup().await;
     let application = setup.application();
     let input = Word().fake();
-    add::add(application, input, &None).await;
+    add::add(application, input, &None, false).await;
 
     let rows = dip::get_all(&application.db_pool).await.unwrap();
     assert_eq!(rows.len(), 1);
@@ -23,7 +23,7 @@ async fn adding_new_value_should_have_correct_dir_context() {
     let setup = TestApp::setup().await;
     let application = setup.application();
     let input = Word().fake();
-    add::add(application, input, &None).await;
+    add::add(application, input, &None, false).await;
 
     let rows = dip::get_all(&application.db_pool).await.unwrap();
     assert_eq!(rows.len(), 1);

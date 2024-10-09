@@ -6,7 +6,7 @@ pub struct Dip {
     pub id: String,
     pub value: String,
     pub note: Option<String>,
-    pub dir_context_id: String,
+    pub dir_context_id: Option<String>,
     pub context_group_id: Option<String>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
@@ -14,7 +14,7 @@ pub struct Dip {
 
 impl Dip {
     pub fn new(
-        context_id: &str,
+        context_id: Option<&str>,
         value: &str,
         note: Option<&str>,
         context_group_id: Option<&str>,
@@ -26,7 +26,7 @@ impl Dip {
             id,
             value: value.into(),
             note,
-            dir_context_id: context_id.into(),
+            dir_context_id: context_id.map(|x| x.to_string()),
             context_group_id: context_group_id.map(String::from),
             created_at: now,
             updated_at: now,
@@ -101,7 +101,10 @@ pub async fn db_all(conn: &SqlitePool) -> Option<Vec<DisplayDip>> {
     }
 }
 
-pub async fn db_context_all(conn: &SqlitePool, context: &RuntimeDirContext) -> Option<Vec<DisplayDip>> {
+pub async fn db_context_all(
+    conn: &SqlitePool,
+    context: &RuntimeDirContext,
+) -> Option<Vec<DisplayDip>> {
     let dir_path = format!("{}%", context.path());
     match sqlx::query_as(
         r#"
@@ -125,7 +128,7 @@ pub async fn db_context_all(conn: &SqlitePool, context: &RuntimeDirContext) -> O
 
 pub async fn create(
     tx: &mut Transaction<'_, Sqlite>,
-    dir_context_id: &str,
+    dir_context_id: Option<&str>,
     value: &str,
     note: Option<&str>,
     context_group_id: Option<&str>,
