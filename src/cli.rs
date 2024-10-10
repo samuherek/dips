@@ -3,7 +3,7 @@ use crate::configuration::{Application, ConfigError, Environment, Settings};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(version, about, long_about = None, arg_required_else_help(true))]
+#[command(version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -69,10 +69,7 @@ pub async fn run() {
                     }
                 },
                 _ => {
-                    // TODO: figure out how to programatically trigger help in clap
-                    println!(
-                        "Incorrect usage of dips. Please check the help section with 'dips help'"
-                    );
+                    commands::core::exec().expect("Failed to run the app")
                 }
             }
         }
