@@ -68,9 +68,7 @@ pub async fn run() {
                         eprintln!("ERROR: game errored out: {e}");
                     }
                 },
-                _ => {
-                    commands::core::exec().expect("Failed to run the app")
-                }
+                _ => commands::core::exec(&app).await.expect("Failed to run the app"),
             }
         }
     }
