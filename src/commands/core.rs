@@ -89,16 +89,22 @@ struct App {
     dir_context: DirContext,
 }
 
+// - find the parent git -> get remote
+// - compare db git remote compare the dir path
+
 impl App {
     pub async fn build(config: configuration::Application) -> color_eyre::Result<Self> {
-        let dir_context = dir_context::db_find_one(
-            &config.db_pool,
-            &config.context_dir.path(),
-            config.context_dir.git_dir(),
-            config.context_dir.git_remote(),
-        )
-        .await
-        .expect("Failed to find context dir");
+        let dir_context = dir_context::get_closest(&config.db_pool, &config.context_dir).await.expect("Failed to get dir context");
+
+        // let dir_context = dir_context::db_find_one(
+        //     &config.db_pool,
+        //     &config.context_dir.path(),
+        //     config.context_dir.git_dir(),
+        //     config.context_dir.git_remote(),
+        // )
+        // .await
+        // .expect("Failed to find context dir");
+
         let items = dip::get_dir_context_all(&config.db_pool, &dir_context.id).await?;
         let context_list_view = ContextListView::build(items);
         Ok(Self {

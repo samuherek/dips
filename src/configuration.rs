@@ -67,7 +67,13 @@ impl DatabaseSettings {
     /// Build the database settings from all available configs
     pub fn build(env: &Environment) -> Self {
         let path = match env {
-            Environment::Development => DB_NAME.to_string(),
+            Environment::Development => {
+                if let Ok(path) = std::env::var("DEBUG_DB_PATH") {
+                    path
+                } else {
+                    DB_NAME.to_string()
+                }
+            }
             Environment::Production => dirs::home_dir()
                 .expect("Failed to find home directory")
                 .join(".dips")

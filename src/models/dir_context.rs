@@ -3,6 +3,9 @@ use sqlx::{Sqlite, SqlitePool, Transaction};
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug)]
+pub struct DipContext {}
+
 #[derive(serde::Deserialize, sqlx::FromRow, Debug)]
 pub struct DirContext {
     pub id: String,
@@ -183,4 +186,25 @@ pub async fn db_find_or_create(
     } else {
         db_create(tx, current_path, git_dir_name, git_remote).await
     }
+}
+
+pub async fn get_closest(
+    conn: &SqlitePool,
+    ctx: &RuntimeDirContext,
+) -> Result<DirContext, sqlx::Error> {
+    let git_remote = ctx.git_remote();
+    let path = ctx.path();
+    sqlx::query_as!(
+        DirContext,
+        r"
+            select * from dir_contexts 
+            where git_remote = $1
+            or $2 like dir_path || '%'
+            order by length(dir_path) desc
+        ",
+        git_remote,
+        path
+    )
+    .fetch_one(conn)
+    .await
 }
