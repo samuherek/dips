@@ -1,6 +1,6 @@
 use crate::configuration;
 use crate::models::dip::{self, DipRowFull};
-use crate::models::dir_context::{self, DirContext, RuntimeDirContext};
+use crate::models::dir_context::{self, ContextScope, DirContext};
 use crate::tui;
 use color_eyre::eyre::WrapErr;
 use ratatui::buffer::Buffer;
@@ -86,7 +86,7 @@ struct App {
     mode: Mode,
     view: View,
     context_list_view: ContextListView,
-    dir_context: DirContext,
+    context_scope: ContextScope,
 }
 
 // - find the parent git -> get remote
@@ -94,7 +94,9 @@ struct App {
 
 impl App {
     pub async fn build(config: configuration::Application) -> color_eyre::Result<Self> {
-        let dir_context = dir_context::get_closest(&config.db_pool, &config.context_dir).await.expect("Failed to get dir context");
+        let context_scope = dir_context::get_closest(&config.db_pool, &config.context_dir)
+            .await
+            .expect("Failed to get dir context");
 
         // let dir_context = dir_context::db_find_one(
         //     &config.db_pool,
@@ -105,14 +107,14 @@ impl App {
         // .await
         // .expect("Failed to find context dir");
 
-        let items = dip::get_dir_context_all(&config.db_pool, &dir_context.id).await?;
+        let items = dip::get_dir_context_all(&config.db_pool, &context_scope).await?;
         let context_list_view = ContextListView::build(items);
         Ok(Self {
             db_pool: config.db_pool,
             mode: Mode::default(),
             view: View::default(),
             context_list_view,
-            dir_context,
+            context_scope,
         })
     }
 
@@ -193,7 +195,7 @@ impl App {
     fn render_header(&self, area: Rect, buf: &mut Buffer) {
         let text = Line::from(vec![
             Span::raw("Dips: "),
-            Span::raw(&self.dir_context.dir_path),
+            Span::raw(self.context_scope.label()),
         ]);
         Paragraph::new(text)
             .block(

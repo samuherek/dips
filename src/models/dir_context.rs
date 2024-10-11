@@ -4,7 +4,35 @@ use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
-pub struct DipContext {}
+pub enum ContextScope {
+    Dir(DirContext),
+    Global,
+}
+
+impl ContextScope {
+    pub fn label(&self) -> String {
+        match self {
+            Self::Dir(dir) => dir.dir_path.to_owned(),
+            Self::Global => "Global".to_string(),
+        }
+    }
+
+    pub fn id(&self) -> Option<String> {
+        match self {
+            Self::Dir(dir) => Some(dir.id.to_owned()),
+            Self::Global => None
+        }
+    }
+}
+
+impl From<Option<DirContext>> for ContextScope {
+    fn from(value: Option<DirContext>) -> Self {
+        match value {
+            Some(dir) => ContextScope::Dir(dir),
+            None => ContextScope::Global,
+        }
+    }
+}
 
 #[derive(serde::Deserialize, sqlx::FromRow, Debug)]
 pub struct DirContext {
@@ -191,20 +219,22 @@ pub async fn db_find_or_create(
 pub async fn get_closest(
     conn: &SqlitePool,
     ctx: &RuntimeDirContext,
-) -> Result<DirContext, sqlx::Error> {
+) -> Result<ContextScope, sqlx::Error> {
     let git_remote = ctx.git_remote();
     let path = ctx.path();
-    sqlx::query_as!(
+    let res = sqlx::query_as!(
         DirContext,
         r"
             select * from dir_contexts 
             where git_remote = $1
             or $2 like dir_path || '%'
             order by length(dir_path) desc
+            limit 1
         ",
         git_remote,
         path
     )
-    .fetch_one(conn)
-    .await
+    .fetch_optional(conn)
+    .await?;
+    Ok(ContextScope::from(res))
 }

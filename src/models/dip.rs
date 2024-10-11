@@ -1,4 +1,4 @@
-use crate::models::dir_context::{DirContext, RuntimeDirContext};
+use crate::models::dir_context::{ContextScope, RuntimeDirContext};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 #[derive(serde::Serialize, serde::Deserialize, sqlx::FromRow, Debug)]
@@ -58,7 +58,7 @@ impl DisplayDip {
 
 pub async fn get_dir_context_all(
     conn: &SqlitePool,
-    dir_context_id: &str,
+    scope: &ContextScope,
 ) -> Result<Vec<DipRowFull>, sqlx::Error> {
     sqlx::query_as(
         r"
@@ -71,7 +71,7 @@ pub async fn get_dir_context_all(
         WHERE dips.dir_context_id = $1
         ",
     )
-    .bind(dir_context_id)
+    .bind(scope.id())
     .fetch_all(conn)
     .await
 }
