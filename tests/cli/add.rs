@@ -46,7 +46,6 @@ async fn adding_new_value_with_group_stores_group() {
 
     assert_eq!(value.value, input);
     assert!(value.dir_context_id.is_some());
-    assert_eq!(value.context_group_name, Some(group));
 }
 
 #[tokio::test]
@@ -62,7 +61,6 @@ async fn adding_value_with_global_flag_stores_global() {
 
     assert_eq!(value.value, input);
     assert_eq!(value.dir_context_id, None);
-    assert!(value.context_group_name.is_none());
 }
 
 #[tokio::test]

@@ -1,49 +1,63 @@
 use crate::configuration;
 use crate::models::dip::{self, DipRowFull};
-use crate::models::dir_context::RuntimeDirContext;
+use crate::models::dir_context::{self, DirContext, RuntimeDirContext};
 use crate::tui;
 use color_eyre::eyre::WrapErr;
+use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::palette::tailwind::SLATE;
-use ratatui::style::{Modifier, Style};
-use ratatui::text::Text;
-use ratatui::widgets::{Block, Borders, HighlightSpacing, List, ListItem, ListState, Paragraph};
+use ratatui::style::Style;
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{
+    Block, Borders, HighlightSpacing, List, ListItem, ListState, Paragraph, StatefulWidget, Widget,
+    Wrap,
+};
+use sqlx::{Pool, Sqlite};
 
 #[derive(Debug, Default)]
 enum View {
     #[default]
-    Entry,
+    ContextList,
 }
 
-#[derive(Debug)]
-struct App<'a> {
-    view: View,
-    dir_context: &'a RuntimeDirContext,
+#[derive(Debug, Default)]
+struct ContextListView {
     items: Vec<DipRowFull>,
-    list_state: ListState,
-    exit: bool,
+    item_index: usize,
 }
 
-fn render(terminal: &mut tui::Tui, app: &mut App) -> color_eyre::Result<()> {
-    terminal.draw(|frame| {
-        let layout = Layout::new(
-            Direction::Vertical,
-            vec![
-                Constraint::Length(2),
-                Constraint::Min(2),
-                Constraint::Length(1),
-            ],
-        )
-        .split(frame.size());
+impl ContextListView {
+    pub fn build(items: Vec<DipRowFull>) -> Self {
+        Self {
+            items,
+            item_index: 0,
+        }
+    }
 
-        frame.render_widget(
-            Paragraph::new(Text::from(app.dir_context.path()))
-                .block(Block::new().borders(Borders::BOTTOM)),
-            layout[0],
-        );
+    /// Select the previous email (with wrap around).
+    pub fn prev(&mut self) {
+        if self.items.len() == 0 {
+            return;
+        }
+        self.item_index = self.item_index.saturating_add(self.items.len() - 1) % self.items.len();
+    }
 
-        let items = app
+    /// Select the next email (with wrap around).
+    pub fn next(&mut self) {
+        if self.items.len() == 0 {
+            return;
+        }
+        self.item_index = self.item_index.saturating_add(1) % self.items.len();
+    }
+}
+
+impl Widget for &ContextListView {
+    fn render(self, area: Rect, buf: &mut Buffer)
+    where
+        Self: Sized,
+    {
+        let items = self
             .items
             .iter()
             .map(|x| ListItem::new(x.value.clone()))
@@ -54,36 +68,60 @@ fn render(terminal: &mut tui::Tui, app: &mut App) -> color_eyre::Result<()> {
             .highlight_symbol("> ")
             .highlight_spacing(HighlightSpacing::Always);
 
-        // StatefulWidget::render(list, area, buf, &mut self.todo_list.state);
-        frame.render_stateful_widget(list, layout[1], &mut app.list_state);
-
-        frame.render_widget(
-            Paragraph::new(Text::from("<Esc> to exit")).block(Block::new()),
-            layout[2],
-        );
-    })?;
-    Ok(())
+        let mut state = ListState::default().with_selected(Some(self.item_index));
+        StatefulWidget::render(list, area, buf, &mut state);
+    }
 }
 
-impl<'a> App<'a> {
-    pub fn new(dir_context: &'a RuntimeDirContext) -> Self {
-        let mut list_state = ListState::default();
-        list_state.select(Some(0));
-        Self {
+#[derive(Debug, Default, PartialEq)]
+enum Mode {
+    #[default]
+    Running,
+    Quit,
+}
+
+#[derive(Debug)]
+struct App {
+    db_pool: Pool<Sqlite>,
+    mode: Mode,
+    view: View,
+    context_list_view: ContextListView,
+    dir_context: DirContext,
+}
+
+impl App {
+    pub async fn build(config: configuration::Application) -> color_eyre::Result<Self> {
+        let dir_context = dir_context::db_find_one(
+            &config.db_pool,
+            &config.context_dir.path(),
+            config.context_dir.git_dir(),
+            config.context_dir.git_remote(),
+        )
+        .await
+        .expect("Failed to find context dir");
+        let items = dip::get_dir_context_all(&config.db_pool, &dir_context.id).await?;
+        let context_list_view = ContextListView::build(items);
+        Ok(Self {
+            db_pool: config.db_pool,
+            mode: Mode::default(),
             view: View::default(),
+            context_list_view,
             dir_context,
-            items: Vec::default(),
-            list_state,
-            exit: false,
-        }
+        })
     }
 
     pub fn run(&mut self, terminal: &mut tui::Tui) -> color_eyre::Result<()> {
-        while !self.exit {
-            let _ = render(terminal, self);
+        while self.is_running() {
+            terminal
+                .draw(|frame| self.draw(frame))
+                .wrap_err("terminal.draw")?;
             let _ = self.handle_events().wrap_err("failed to handle events")?;
         }
         Ok(())
+    }
+
+    fn draw(&self, frame: &mut ratatui::Frame) {
+        frame.render_widget(self, frame.size());
     }
 
     fn handle_events(&mut self) -> color_eyre::Result<()> {
@@ -100,7 +138,7 @@ impl<'a> App<'a> {
     /// Handles all the key events
     fn handle_key_event(&mut self, event: KeyEvent) -> color_eyre::Result<()> {
         match event.code {
-            KeyCode::Esc => self.exit(),
+            KeyCode::Esc => self.mode = Mode::Quit,
             KeyCode::Char('j') | KeyCode::Down => self.next(),
             KeyCode::Char('k') | KeyCode::Up => self.prev(),
             _ => {}
@@ -108,51 +146,81 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    // Add helper methods for navigation
     fn next(&mut self) {
-        let i = match self.list_state.selected() {
-            Some(i) => {
-                if i >= self.items.len() - 1 {
-                    0
-                } else {
-                    i + 1
-                }
-            }
-            None => 0,
-        };
-        self.list_state.select(Some(i));
+        match self.view {
+            View::ContextList => self.context_list_view.next(),
+        }
     }
 
     fn prev(&mut self) {
-        let i = match self.list_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.items.len() - 1
-                } else {
-                    i - 1
-                }
-            }
-            None => 0,
-        };
-        self.list_state.select(Some(i));
+        match self.view {
+            View::ContextList => self.context_list_view.prev(),
+        }
     }
 
-    fn set_data(&mut self, data: Vec<DipRowFull>) {
-        self.items = data;
-    }
-
-    pub fn exit(&mut self) {
-        self.exit = true;
+    fn is_running(&self) -> bool {
+        self.mode == Mode::Running
     }
 }
 
-pub async fn exec(config: &configuration::Application) -> color_eyre::Result<()> {
+impl Widget for &App {
+    fn render(self, area: ratatui::prelude::Rect, buf: &mut ratatui::prelude::Buffer)
+    where
+        Self: Sized,
+    {
+        let layout = Layout::new(
+            Direction::Vertical,
+            vec![
+                Constraint::Length(2),
+                Constraint::Min(2),
+                Constraint::Length(1),
+            ],
+        );
+        let [header, main, toolbar] = layout.areas(area);
+        self.render_header(header, buf);
+        self.render_view(main, buf);
+        self.render_toolbar(toolbar, buf);
+    }
+}
+
+impl App {
+    fn render_header(&self, area: Rect, buf: &mut Buffer) {
+        let text = Line::from(vec![
+            Span::raw("Dips: "),
+            Span::raw(&self.dir_context.dir_path),
+        ]);
+        Paragraph::new(text)
+            .block(
+                Block::new()
+                    .borders(Borders::BOTTOM)
+                    .border_style(Style::new().fg(SLATE.c500)),
+            )
+            .wrap(Wrap { trim: true })
+            .render(area, buf);
+    }
+
+    fn render_toolbar(&self, area: Rect, buf: &mut Buffer) {
+        Paragraph::new(Text::from("<Esc> to exit"))
+            .block(Block::new())
+            .render(area, buf);
+    }
+
+    fn render_view(&self, area: Rect, buf: &mut Buffer) {
+        match self.view {
+            View::ContextList => self.context_list_view.render(area, buf),
+        }
+    }
+}
+
+pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> {
     tui::install_hooks()?;
     let mut terminal = tui::init()?;
-    let list = dip::get_all(&config.db_pool).await?;
-    let mut app = App::new(&config.context_dir);
-    app.set_data(list);
-    let _ = app.run(&mut terminal);
+    // let list = dip::get_all(&config.db_pool).await?;
+    let mut app = App::build(config).await?;
+    // app.set_data(list);
+    if let Err(e) = app.run(&mut terminal) {
+        println!("{e:?}");
+    }
     tui::restore()?;
     Ok(())
 }

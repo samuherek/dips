@@ -1,4 +1,4 @@
-use crate::models::dir_context::RuntimeDirContext;
+use crate::models::dir_context::{DirContext, RuntimeDirContext};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 #[derive(serde::Serialize, serde::Deserialize, sqlx::FromRow, Debug)]
@@ -7,18 +7,12 @@ pub struct Dip {
     pub value: String,
     pub note: Option<String>,
     pub dir_context_id: Option<String>,
-    pub context_group_id: Option<String>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
 }
 
 impl Dip {
-    pub fn new(
-        context_id: Option<&str>,
-        value: &str,
-        note: Option<&str>,
-        context_group_id: Option<&str>,
-    ) -> Self {
+    pub fn new(context_id: Option<&str>, value: &str, note: Option<&str>) -> Self {
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().date_naive().into();
         let note = note.map(|v| v.to_string());
@@ -27,7 +21,6 @@ impl Dip {
             value: value.into(),
             note,
             dir_context_id: context_id.map(|x| x.to_string()),
-            context_group_id: context_group_id.map(String::from),
             created_at: now,
             updated_at: now,
         }
@@ -46,13 +39,11 @@ pub struct DipRowFull {
     pub value: String,
     pub note: Option<String>,
     pub dir_context_id: Option<String>,
-    pub context_group_id: Option<String>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
     pub git_remote: Option<String>,
     pub git_dir_name: Option<String>,
     pub dir_path: String,
-    pub context_group_name: Option<String>,
 }
 
 impl DisplayDip {
@@ -65,17 +56,35 @@ impl DisplayDip {
     }
 }
 
+pub async fn get_dir_context_all(
+    conn: &SqlitePool,
+    dir_context_id: &str,
+) -> Result<Vec<DipRowFull>, sqlx::Error> {
+    sqlx::query_as(
+        r"
+       select dips.*, 
+            dir_contexts.dir_path, 
+            dir_contexts.git_remote, 
+            dir_contexts.git_dir_name 
+        from dips
+        left join dir_contexts on dips.dir_context_id = dir_contexts.id
+        WHERE dips.dir_context_id = $1
+        ",
+    )
+    .bind(dir_context_id)
+    .fetch_all(conn)
+    .await
+}
+
 pub async fn get_all(conn: &SqlitePool) -> Result<Vec<DipRowFull>, sqlx::Error> {
     sqlx::query_as(
         r#"
        select dips.*, 
             dir_contexts.dir_path, 
             dir_contexts.git_remote, 
-            dir_contexts.git_dir_name, 
-            context_groups.name as context_group_name
+            dir_contexts.git_dir_name 
        from dips 
        left join dir_contexts on dips.dir_context_id = dir_contexts.id
-       left join context_groups on dips.context_group_id = context_groups.id
        "#,
     )
     .fetch_all(conn)
@@ -131,19 +140,17 @@ pub async fn create(
     dir_context_id: Option<&str>,
     value: &str,
     note: Option<&str>,
-    context_group_id: Option<&str>,
 ) -> Result<Dip, sqlx::Error> {
-    let item = Dip::new(dir_context_id, value, note, context_group_id);
+    let item = Dip::new(dir_context_id, value, note);
     let _ = sqlx::query!(
         r#"
-        insert into dips(id, value, note, created_at, updated_at, context_group_id, dir_context_id)
-        values($1, $2, $3, $4, $4, $5, $6)
+        insert into dips(id, value, note, created_at, updated_at, dir_context_id)
+        values($1, $2, $3, $4, $4, $5)
         "#,
         item.id,
         item.value,
         item.note,
         item.created_at,
-        item.context_group_id,
         item.dir_context_id
     )
     .execute(&mut **tx)
@@ -156,16 +163,14 @@ pub async fn find_one(
     pool: &SqlitePool,
     value: &str,
     dir_context_id: Option<&str>,
-    context_group_id: Option<&str>,
 ) -> Result<Option<Dip>, sqlx::Error> {
     let item = sqlx::query_as(
         r"
-        select * from dips where value = $1 and dir_context_id = $2 and context_group_id = $3
+        select * from dips where value = $1 and dir_context_id = $2 
         ",
     )
     .bind(value)
     .bind(dir_context_id)
-    .bind(context_group_id)
     .fetch_optional(pool)
     .await?;
     Ok(item)
