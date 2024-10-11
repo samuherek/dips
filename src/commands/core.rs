@@ -185,7 +185,7 @@ impl Widget for &App {
 impl App {
     fn render_header(&self, area: Rect, buf: &mut Buffer) {
         let text = Line::from(vec![
-            Span::raw("Dips: "),
+            Span::raw("Scope: "),
             Span::raw(self.context_scope.label()),
         ]);
         Paragraph::new(text)
