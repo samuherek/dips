@@ -98,15 +98,6 @@ impl App {
             .await
             .expect("Failed to get dir context");
 
-        // let dir_context = dir_context::db_find_one(
-        //     &config.db_pool,
-        //     &config.context_dir.path(),
-        //     config.context_dir.git_dir(),
-        //     config.context_dir.git_remote(),
-        // )
-        // .await
-        // .expect("Failed to find context dir");
-
         let items = dip::get_dir_context_all(&config.db_pool, &context_scope).await?;
         let context_list_view = ContextListView::build(items);
         Ok(Self {

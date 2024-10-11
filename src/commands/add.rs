@@ -1,5 +1,5 @@
 use crate::configuration::Application;
-use crate::models::context_group;
+use crate::models::tag;
 use crate::models::{dip, dir_context};
 
 async fn value_exists(app: &Application, value: &str, group: Option<&str>, global: bool) -> bool {
@@ -38,7 +38,7 @@ async fn value_exists(app: &Application, value: &str, group: Option<&str>, globa
     .is_some()
 }
 
-async fn add_global(app: &Application, value: &str, group: Option<&str>) {
+async fn add_global(app: &Application, value: &str, tag: Option<&str>) {
     let mut tx = app
         .db_pool
         .begin()
@@ -53,7 +53,7 @@ async fn add_global(app: &Application, value: &str, group: Option<&str>) {
     tx.commit().await.expect("Failed to commit transaction");
 }
 
-async fn add_contextual(app: &Application, value: &str, group: Option<&str>) {
+async fn add_contextual(app: &Application, value: &str, tag: Option<&str>) {
     let mut tx = app
         .db_pool
         .begin()
@@ -63,23 +63,15 @@ async fn add_contextual(app: &Application, value: &str, group: Option<&str>) {
         .await
         .expect("Failed to get the current dir context");
 
-    // let current_group = if let Some(group) = group {
-    //     Some(
-    //         context_group::get_or_create(
-    //             &mut tx,
-    //             group.as_ref(),
-    //             Some(current_dir_context.id.as_ref()),
-    //         )
-    //         .await
-    //         .expect("Failed to get or create a group"),
-    //     )
-    // } else {
-    //     None
-    // };
-
-    dip::create(&mut tx, Some(current_dir_context.id.as_ref()), &value, None)
+    let item = dip::create(&mut tx, Some(current_dir_context.id.as_ref()), &value, None)
         .await
         .expect("Failed to create a dip");
+
+    if let Some(tag) = tag {
+        tag::create_dip_tag(&mut tx, &item.id, tag)
+            .await
+            .expect("Failed to tag a dip");
+    }
 
     // Commit the transaction
     tx.commit().await.expect("Failed to commit transaction");
