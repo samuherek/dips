@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "insert into dips_tags (dip_id, tag_id) values($1, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "1dd8502ba76389365885fcdea45c9f2eee201ca2a55bebf42fa4593658bc6c81"
+}
