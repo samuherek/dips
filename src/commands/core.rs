@@ -18,7 +18,7 @@ use sqlx::{Pool, Sqlite};
 #[derive(Debug, Default)]
 enum View {
     #[default]
-    ContextList,
+    ScopeList,
 }
 
 #[derive(Debug, Default)]
@@ -80,11 +80,20 @@ enum Mode {
     Quit,
 }
 
+#[derive(Debug, Default, PartialEq)]
+enum Interaction {
+    #[default]
+    None,
+    Search,
+}
+
 #[derive(Debug)]
 struct App {
     db_pool: Pool<Sqlite>,
     mode: Mode,
     view: View,
+    search: String,
+    interaction: Interaction,
     context_list_view: ContextListView,
     context_scope: ContextScope,
 }
@@ -104,6 +113,8 @@ impl App {
             db_pool: config.db_pool,
             mode: Mode::default(),
             view: View::default(),
+            search: String::default(),
+            interaction: Interaction::default(),
             context_list_view,
             context_scope,
         })
@@ -136,24 +147,45 @@ impl App {
 
     /// Handles all the key events
     fn handle_key_event(&mut self, event: KeyEvent) -> color_eyre::Result<()> {
-        match event.code {
-            KeyCode::Esc => self.mode = Mode::Quit,
-            KeyCode::Char('j') | KeyCode::Down => self.next(),
-            KeyCode::Char('k') | KeyCode::Up => self.prev(),
-            _ => {}
+        match self.interaction {
+            Interaction::Search => match event.code {
+                KeyCode::Esc => self.interaction = Interaction::None,
+                KeyCode::Char(c) => {
+                    self.search.push(c);
+                    self.search();
+                }
+                KeyCode::Backspace => {
+                    self.search.pop();
+                }
+                _ => {}
+            },
+            Interaction::None => match event.code {
+                KeyCode::Esc => self.mode = Mode::Quit,
+                KeyCode::Char('j') | KeyCode::Down => self.next(),
+                KeyCode::Char('k') | KeyCode::Up => self.prev(),
+                KeyCode::Char('/') => self.interaction = Interaction::Search,
+                _ => {}
+            },
         }
+
         Ok(())
+    }
+
+    fn search(&self) {
+        match self.view {
+            View::ScopeList => self.context_list_view.serach(&self.search),
+        }
     }
 
     fn next(&mut self) {
         match self.view {
-            View::ContextList => self.context_list_view.next(),
+            View::ScopeList => self.context_list_view.next(),
         }
     }
 
     fn prev(&mut self) {
         match self.view {
-            View::ContextList => self.context_list_view.prev(),
+            View::ScopeList => self.context_list_view.prev(),
         }
     }
 
@@ -178,7 +210,10 @@ impl Widget for &App {
         let [header, main, toolbar] = layout.areas(area);
         self.render_header(header, buf);
         self.render_view(main, buf);
-        self.render_toolbar(toolbar, buf);
+        match self.interaction {
+            Interaction::None => self.render_toolbar(toolbar, buf),
+            Interaction::Search => self.render_search(toolbar, buf),
+        }
     }
 }
 
@@ -199,14 +234,27 @@ impl App {
     }
 
     fn render_toolbar(&self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(Text::from("<Esc> to exit"))
-            .block(Block::new())
-            .render(area, buf);
+        Paragraph::new(Line::from(vec![
+            Span::raw("<Esc> to exit"),
+            Span::raw("  |  "),
+            Span::raw("< / > to search"),
+        ]))
+        .block(Block::new())
+        .render(area, buf);
+    }
+
+    fn render_search(&self, area: Rect, buf: &mut Buffer) {
+        Paragraph::new(Line::from(vec![
+            Span::raw("Search: "),
+            Span::from(&self.search),
+        ]))
+        .block(Block::new())
+        .render(area, buf);
     }
 
     fn render_view(&self, area: Rect, buf: &mut Buffer) {
         match self.view {
-            View::ContextList => self.context_list_view.render(area, buf),
+            View::ScopeList => self.context_list_view.render(area, buf),
         }
     }
 }
@@ -214,9 +262,7 @@ impl App {
 pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> {
     tui::install_hooks()?;
     let mut terminal = tui::init()?;
-    // let list = dip::get_all(&config.db_pool).await?;
     let mut app = App::build(config).await?;
-    // app.set_data(list);
     if let Err(e) = app.run(&mut terminal) {
         println!("{e:?}");
     }
