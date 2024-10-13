@@ -59,7 +59,9 @@ impl DisplayDip {
 pub async fn get_dir_context_all(
     conn: &SqlitePool,
     scope: &ContextScope,
+    search: Option<&str>,
 ) -> Result<Vec<DipRowFull>, sqlx::Error> {
+    let search = format!("%{}%", search.unwrap_or_default());
     sqlx::query_as(
         r"
        select dips.*, 
@@ -69,9 +71,11 @@ pub async fn get_dir_context_all(
         from dips
         left join dir_contexts on dips.dir_context_id = dir_contexts.id
         WHERE dips.dir_context_id = $1
+        and LOWER(dips.value) LIKE LOWER($2)
         ",
     )
     .bind(scope.id())
+    .bind(search)
     .fetch_all(conn)
     .await
 }

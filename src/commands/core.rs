@@ -1,5 +1,5 @@
 use crate::configuration;
-use crate::models::dip::{self, DipRowFull};
+use crate::models::dip::{self, Dip, DipRowFull};
 use crate::models::dir_context::{self, ContextScope, DirContext};
 use crate::tui;
 use color_eyre::eyre::WrapErr;
@@ -35,6 +35,11 @@ impl ContextListView {
         }
     }
 
+    pub fn set_values(&mut self, items: Vec<DipRowFull>) {
+        self.items = items;
+        self.item_index = 0;
+    }
+
     /// Select the previous email (with wrap around).
     pub fn prev(&mut self) {
         if self.items.len() == 0 {
@@ -68,7 +73,12 @@ impl Widget for &ContextListView {
             .highlight_symbol("> ")
             .highlight_spacing(HighlightSpacing::Always);
 
-        let mut state = ListState::default().with_selected(Some(self.item_index));
+        let selected = if self.items.len() > 0 {
+            Some(self.item_index)
+        } else {
+            None
+        };
+        let mut state = ListState::default().with_selected(selected);
         StatefulWidget::render(list, area, buf, &mut state);
     }
 }
@@ -107,7 +117,7 @@ impl App {
             .await
             .expect("Failed to get dir context");
 
-        let items = dip::get_dir_context_all(&config.db_pool, &context_scope).await?;
+        let items = dip::get_dir_context_all(&config.db_pool, &context_scope, None).await?;
         let context_list_view = ContextListView::build(items);
         Ok(Self {
             db_pool: config.db_pool,
@@ -120,12 +130,15 @@ impl App {
         })
     }
 
-    pub fn run(&mut self, terminal: &mut tui::Tui) -> color_eyre::Result<()> {
+    pub async fn run(&mut self, terminal: &mut tui::Tui) -> color_eyre::Result<()> {
         while self.is_running() {
             terminal
                 .draw(|frame| self.draw(frame))
                 .wrap_err("terminal.draw")?;
-            let _ = self.handle_events().wrap_err("failed to handle events")?;
+            let _ = self
+                .handle_events()
+                .await
+                .wrap_err("failed to handle events")?;
         }
         Ok(())
     }
@@ -134,28 +147,34 @@ impl App {
         frame.render_widget(self, frame.size());
     }
 
-    fn handle_events(&mut self) -> color_eyre::Result<()> {
+    async fn handle_events(&mut self) -> color_eyre::Result<()> {
         match event::read()? {
             // it's important to check that the event is a key press event as
             // crossterm also emits key release and repeat events on Windows.
             Event::Key(key_event) if key_event.kind == KeyEventKind::Press => self
                 .handle_key_event(key_event)
+                .await
                 .wrap_err_with(|| format!("handling key event failed: \n{key_event:#?}")),
             _ => Ok(()),
         }
     }
 
     /// Handles all the key events
-    fn handle_key_event(&mut self, event: KeyEvent) -> color_eyre::Result<()> {
+    async fn handle_key_event(&mut self, event: KeyEvent) -> color_eyre::Result<()> {
         match self.interaction {
             Interaction::Search => match event.code {
-                KeyCode::Esc => self.interaction = Interaction::None,
+                KeyCode::Esc => {
+                    self.search.clear();
+                    self.search().await?;
+                    self.interaction = Interaction::None;
+                }
                 KeyCode::Char(c) => {
                     self.search.push(c);
-                    self.search();
+                    self.search().await?;
                 }
                 KeyCode::Backspace => {
                     self.search.pop();
+                    self.search().await?;
                 }
                 _ => {}
             },
@@ -171,10 +190,13 @@ impl App {
         Ok(())
     }
 
-    fn search(&self) {
-        match self.view {
-            View::ScopeList => self.context_list_view.serach(&self.search),
-        }
+    async fn search(&mut self) -> color_eyre::Result<()> {
+        let items =
+            dip::get_dir_context_all(&self.db_pool, &self.context_scope, Some(&self.search))
+                .await
+                .wrap_err("Failed to query database")?;
+        self.context_list_view.set_values(items);
+        Ok(())
     }
 
     fn next(&mut self) {
@@ -263,7 +285,7 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
     tui::install_hooks()?;
     let mut terminal = tui::init()?;
     let mut app = App::build(config).await?;
-    if let Err(e) = app.run(&mut terminal) {
+    if let Err(e) = app.run(&mut terminal).await {
         println!("{e:?}");
     }
     tui::restore()?;
