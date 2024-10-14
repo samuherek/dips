@@ -299,6 +299,10 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                 EventCtx::Search => {
                     app_state.event_context = EventCtx::List;
                     app_state.search.clear();
+                    query_mgr.dips(DipsFilter {
+                        scope_id: app_state.scope.id(),
+                        search: None,
+                    })
                 }
                 _ => app_state.mode = Mode::Quit,
             },
@@ -327,12 +331,22 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                 }
             }
             Event::KeyboardChar(c) => match app_state.event_context {
-                EventCtx::Search => app_state.search.push(c),
+                EventCtx::Search => {
+                    app_state.search.push(c);
+                    query_mgr.dips(DipsFilter {
+                        scope_id: app_state.scope.id(),
+                        search: Some(app_state.search.to_owned()),
+                    })
+                }
                 _ => {}
             },
             Event::KeyboardBackspace => match app_state.event_context {
                 EventCtx::Search => {
                     let _ = app_state.search.pop();
+                    query_mgr.dips(DipsFilter {
+                        scope_id: app_state.scope.id(),
+                        search: Some(app_state.search.to_owned()),
+                    })
                 }
                 _ => {}
             },
