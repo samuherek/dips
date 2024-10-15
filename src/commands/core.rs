@@ -7,7 +7,7 @@ use color_eyre::eyre::WrapErr;
 use crossterm::event::{Event as CrosstermEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::stream::StreamExt;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::palette::tailwind::{RED, SLATE};
+use ratatui::style::palette::tailwind::{RED, SLATE, YELLOW};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
@@ -23,6 +23,12 @@ enum EventCtx {
     List,
     Search,
     Tag,
+    Confirm(Confirmation),
+}
+
+#[derive(Debug)]
+enum Confirmation {
+    Delete,
 }
 
 #[derive(Debug, Default)]
@@ -144,6 +150,20 @@ fn render_error(value: &str, area: Rect, frame: &mut Frame) {
     );
 }
 
+fn render_confirm(kind: &Confirmation, value: &str, area: Rect, frame: &mut Frame) {
+    let t = match kind {
+        Confirmation::Delete => "DELETE:",
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::from(t).style(Style::new().fg(YELLOW.c500)),
+            Span::from(" Are you sure? y/n: ").style(Style::new().fg(YELLOW.c500)),
+            Span::from(value),
+        ])),
+        area,
+    );
+}
+
 #[derive(Debug)]
 enum DbQuery {
     Dips(DipsFilter),
@@ -153,12 +173,14 @@ enum DbQuery {
 enum DbResult {
     Dips(Vec<DipRowFull>),
     Tag,
+    Remove,
 }
 
 #[derive(Debug)]
 enum Command {
     Search,
     Tag,
+    Confirm(Confirmation),
 }
 
 #[derive(Debug)]
@@ -205,6 +227,9 @@ impl EventService {
                     (KeyCode::Char('k'), _) => Some(Event::NavUp),
                     (KeyCode::Char('/'), _) => Some(Event::Command(Command::Search)),
                     (KeyCode::Char('t'), _) => Some(Event::Command(Command::Tag)),
+                    (KeyCode::Char('d'), _) => {
+                        Some(Event::Command(Command::Confirm(Confirmation::Delete)))
+                    }
                     (_, _) => None,
                 },
                 EventCtx::Search => match (key_event.code, key_event.modifiers) {
@@ -219,6 +244,14 @@ impl EventService {
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Event::KeyboardCtrlC),
                     (KeyCode::Backspace, _) => Some(Event::KeyboardBackspace),
                     (KeyCode::Char(c), _) => Some(Event::KeyboardChar(c)),
+                    (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
+                    (_, _) => None,
+                },
+                EventCtx::Confirm(_) => match (key_event.code, key_event.modifiers) {
+                    (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Event::KeyboardCtrlC),
+                    (KeyCode::Char(c), _) => Some(Event::KeyboardChar(c)),
+                    (KeyCode::Backspace, _) => Some(Event::KeyboardBackspace),
                     (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
                     (_, _) => None,
                 },
@@ -301,6 +334,30 @@ impl QueryManager {
             }
         }
     }
+
+    fn remove_dip(&self, state: &AppState) {
+        let item = state
+            .list_selection_index
+            .and_then(|x| state.scope_dips.get(x));
+        match item {
+            Some(item) => {
+                let id = item.id.to_owned();
+                let pool = self.db_pool.clone();
+                let sender = self.sender.clone();
+                tokio::spawn(async move {
+                    dip::delete(&pool, &id)
+                        .await
+                        .expect("Failed to delete a dip");
+                    let _ = sender.send(Event::DbResponse(DbResult::Remove));
+                });
+            }
+            None => {
+                let _ = self
+                    .sender
+                    .send(Event::Error("Could not find item to tag."));
+            }
+        }
+    }
 }
 
 pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> {
@@ -346,10 +403,13 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                 if let Some(err) = app_state.error {
                     render_error(err, footer, frame);
                 } else {
-                    match app_state.event_context {
+                    match &app_state.event_context {
                         EventCtx::List => render_toolbar(footer, frame),
                         EventCtx::Search => render_search(&app_state.search, footer, frame),
                         EventCtx::Tag => render_tag(&app_state.search, footer, frame),
+                        EventCtx::Confirm(kind) => {
+                            render_confirm(kind, &app_state.search, footer, frame)
+                        }
                     }
                 }
             })
@@ -367,6 +427,7 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                     app_state.event_context = EventCtx::List;
                     app_state.search.clear();
                 }
+                EventCtx::Confirm(_) => app_state.event_context = EventCtx::List,
                 EventCtx::List => app_state.mode = Mode::Quit,
             },
             Event::DbRequest(query) => match query {
@@ -377,7 +438,7 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                     app_state.scope_dips = items;
                     app_state.list_selection_index = Some(0);
                 }
-                DbResult::Tag => {
+                DbResult::Tag | DbResult::Remove => {
                     query_mgr.dips(&app_state);
                 }
             },
@@ -401,7 +462,7 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                     app_state.search.push(c);
                     query_mgr.dips(&app_state)
                 }
-                EventCtx::Tag => {
+                EventCtx::Tag | EventCtx::Confirm(_) => {
                     app_state.search.push(c);
                 }
                 EventCtx::List => {}
@@ -411,7 +472,7 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                     let _ = app_state.search.pop();
                     query_mgr.dips(&app_state);
                 }
-                EventCtx::Tag => {
+                EventCtx::Tag | EventCtx::Confirm(_) => {
                     let _ = app_state.search.pop();
                 }
                 EventCtx::List => {}
@@ -419,6 +480,22 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
             Event::KeyboardEnter => match app_state.event_context {
                 EventCtx::Search => {}
                 EventCtx::List => {}
+                EventCtx::Confirm(_) => {
+                    match app_state.search.to_lowercase().as_str() {
+                        "n" | "no" => {
+                            app_state.search.clear();
+                            app_state.event_context = EventCtx::List;
+                        }
+                        "y" | "yes" => {
+                            query_mgr.remove_dip(&app_state);
+                            app_state.search.clear();
+                            app_state.event_context = EventCtx::List;
+                        }
+                        _ => {
+                            todo!("Add a message that only yes or no is allowed.");
+                        }
+                    };
+                }
                 EventCtx::Tag => {
                     query_mgr.tag_dip(&app_state);
                     app_state.search.clear();
@@ -435,6 +512,9 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                     Command::Tag => {
                         app_state.event_context = EventCtx::Tag;
                         app_state.search.clear();
+                    }
+                    Command::Confirm(value) => {
+                        app_state.event_context = EventCtx::Confirm(value);
                     }
                 }
             }

@@ -183,3 +183,10 @@ pub async fn create(
 
     Ok(item)
 }
+
+pub async fn delete(conn: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    let _ = sqlx::query!("DELETE from dips where id = $1", id)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
