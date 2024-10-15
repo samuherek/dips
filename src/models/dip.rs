@@ -60,6 +60,15 @@ impl Dip {
 #[derive(Debug)]
 pub struct DipTags(Vec<tag::TagMeta>);
 
+impl ToString for DipTags {
+    fn to_string(&self) -> String {
+        self.iter()
+            .map(|x| x.name.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
 #[derive(Debug, sqlx::FromRow)]
 pub struct DipRowFull {
     pub id: String,
@@ -105,7 +114,7 @@ impl Deref for DipTags {
     }
 }
 
-pub async fn get_filterd(
+pub async fn get_filtered(
     conn: &SqlitePool,
     filter: DipsFilter,
 ) -> Result<Vec<DipRowFull>, sqlx::Error> {

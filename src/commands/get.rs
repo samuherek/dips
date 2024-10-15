@@ -23,7 +23,7 @@ pub async fn exec(app: &Application, all: bool) {
             .await
             .expect("Failed to query dir context");
         let filter = dip::DipsFilter::new().with_scope_id(scope.id());
-        let items = dip::get_filterd(&app.db_pool, filter)
+        let items = dip::get_filtered(&app.db_pool, filter)
             .await
             .expect("Failed to read from database");
         println!("Scope: {}", scope.label());

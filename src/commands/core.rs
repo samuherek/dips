@@ -1,5 +1,5 @@
 use crate::configuration;
-use crate::models::dip::DipRowFull;
+use crate::models::dip::{self, DipRowFull, DipsFilter};
 use crate::models::dir_context::{self, ContextScope};
 use crate::models::tag;
 use crate::tui;
@@ -94,7 +94,8 @@ fn render_scope_list(
         .map(|x| {
             ListItem::new(Line::from(vec![
                 Span::raw(x.value.clone()),
-                Span::from(format!(" tag")).style(Style::new().fg(SLATE.c500)),
+                Span::raw(" "),
+                Span::from(format!("{}", x.tags.to_string())).style(Style::new().fg(SLATE.c500)),
             ]))
         })
         .collect::<Vec<_>>();
@@ -141,12 +142,6 @@ fn render_error(value: &str, area: Rect, frame: &mut Frame) {
             .style(Style::new().fg(RED.c500)),
         area,
     );
-}
-
-#[derive(Debug)]
-struct DipsFilter {
-    scope_id: Option<String>,
-    search: Option<String>,
 }
 
 #[derive(Debug)]
@@ -267,32 +262,15 @@ impl QueryManager {
     }
 
     fn dips(&self, state: &AppState) {
-        let filter = DipsFilter {
-            scope_id: state.scope.id(),
-            search: Some(state.search.to_owned()),
-        };
+        let filter = DipsFilter::new()
+            .with_scope_id(state.scope.id())
+            .with_search(&state.search);
         let pool = self.db_pool.clone();
         let sender = self.sender.clone();
         tokio::spawn(async move {
-            // TODO:: use the global dips::query stuff
-            let search = format!("%{}%", filter.search.unwrap_or_default());
-            let res: Vec<DipRowFull> = sqlx::query_as(
-                r"
-       select dips.*, 
-            dir_contexts.dir_path, 
-            dir_contexts.git_remote, 
-            dir_contexts.git_dir_name 
-        from dips
-        left join dir_contexts on dips.dir_context_id = dir_contexts.id
-        WHERE dips.dir_context_id = $1
-        and LOWER(dips.value) LIKE LOWER($2)
-        ",
-            )
-            .bind(filter.scope_id)
-            .bind(search)
-            .fetch_all(&pool)
-            .await
-            .expect("Failed to query database");
+            let res = dip::get_filtered(&pool, filter)
+                .await
+                .expect("Failed to query filtered dips");
             let _ = sender.send(Event::DbResponse(DbResult::Dips(res)));
         });
     }
@@ -337,10 +315,12 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
     app_state.scope = scope;
 
     let query_mgr = QueryManager::new(config.db_pool, tx.clone());
-    events.send(Event::DbRequest(DbQuery::Dips(DipsFilter {
-        scope_id: app_state.scope.id(),
-        search: Some("".into()),
-    })));
+
+    events.send(Event::DbRequest(DbQuery::Dips(
+        DipsFilter::new()
+            .with_scope_id(app_state.scope.id())
+            .with_search(""),
+    )));
 
     while app_state.is_running() {
         terminal
