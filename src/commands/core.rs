@@ -1,6 +1,7 @@
 use crate::configuration;
 use crate::models::dip::{self, DipRowFull};
 use crate::models::dir_context::{self, ContextScope};
+use crate::models::tag;
 use crate::tui;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::{
@@ -8,7 +9,7 @@ use crossterm::event::{
 };
 use futures_util::stream::StreamExt;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::palette::tailwind::SLATE;
+use ratatui::style::palette::tailwind::{RED, SLATE};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
@@ -23,6 +24,7 @@ enum EventCtx {
     #[default]
     List,
     Search,
+    Tag,
 }
 
 #[derive(Debug, Default)]
@@ -47,6 +49,7 @@ struct AppState {
     list_selection_index: Option<usize>,
     search: String,
     scope: ContextScope,
+    error: Option<&'static str>,
 }
 
 impl AppState {
@@ -59,6 +62,7 @@ impl AppState {
             search: String::default(),
             list_selection_index: None,
             scope: ContextScope::Global,
+            error: None,
         }
     }
 
@@ -89,7 +93,12 @@ fn render_scope_list(
 ) {
     let items = items
         .iter()
-        .map(|x| ListItem::new(x.value.clone()))
+        .map(|x| {
+            ListItem::new(Line::from(vec![
+                Span::raw(x.value.clone()),
+                Span::from(format!(" tag")).style(Style::new().fg(SLATE.c500)),
+            ]))
+        })
         .collect::<Vec<_>>();
     let list = List::new(items)
         .block(Block::new())
@@ -121,6 +130,21 @@ fn render_search(value: &str, area: Rect, frame: &mut Frame) {
     );
 }
 
+fn render_tag(value: &str, area: Rect, frame: &mut Frame) {
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![Span::raw("Tag: "), Span::from(value)])).block(Block::new()),
+        area,
+    );
+}
+
+fn render_error(value: &str, area: Rect, frame: &mut Frame) {
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![Span::raw("Error: "), Span::from(value)]))
+            .style(Style::new().fg(RED.c500)),
+        area,
+    );
+}
+
 #[derive(Debug)]
 struct DipsFilter {
     scope_id: Option<String>,
@@ -135,11 +159,13 @@ enum DbQuery {
 #[derive(Debug)]
 enum DbResult {
     Dips(Vec<DipRowFull>),
+    Tag,
 }
 
 #[derive(Debug)]
 enum Command {
     Search,
+    Tag,
 }
 
 #[derive(Debug)]
@@ -150,22 +176,29 @@ enum Event {
     KeyboardCtrlC,
     KeyboardChar(char),
     KeyboardBackspace,
+    KeyboardEnter,
     Command(Command),
     NavDown,
     NavUp,
     UiTick,
+    Error(&'static str),
 }
 
 struct EventService {
     crossterm_events: EventStream,
     events: mpsc::UnboundedReceiver<Event>,
+    dispatcher: mpsc::UnboundedSender<Event>,
 }
 
 impl EventService {
-    fn new(events: mpsc::UnboundedReceiver<Event>) -> Self {
+    fn new(
+        events: mpsc::UnboundedReceiver<Event>,
+        dispatcher: mpsc::UnboundedSender<Event>,
+    ) -> Self {
         Self {
             crossterm_events: EventStream::new(),
             events,
+            dispatcher,
         }
     }
 
@@ -178,6 +211,7 @@ impl EventService {
                     (KeyCode::Char('j'), _) => Some(Event::NavDown),
                     (KeyCode::Char('k'), _) => Some(Event::NavUp),
                     (KeyCode::Char('/'), _) => Some(Event::Command(Command::Search)),
+                    (KeyCode::Char('t'), _) => Some(Event::Command(Command::Tag)),
                     (_, _) => None,
                 },
                 EventCtx::Search => match (key_event.code, key_event.modifiers) {
@@ -187,8 +221,22 @@ impl EventService {
                     (KeyCode::Char(c), _) => Some(Event::KeyboardChar(c)),
                     (_, _) => None,
                 },
+                EventCtx::Tag => match (key_event.code, key_event.modifiers) {
+                    (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Event::KeyboardCtrlC),
+                    (KeyCode::Backspace, _) => Some(Event::KeyboardBackspace),
+                    (KeyCode::Char(c), _) => Some(Event::KeyboardChar(c)),
+                    (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
+                    (_, _) => None,
+                },
             },
             _ => None,
+        }
+    }
+
+    fn send(&self, event: Event) {
+        if self.dispatcher.send(event).is_err() {
+            eprintln!("Failed to dispatch an event");
         }
     }
 
@@ -220,7 +268,11 @@ impl QueryManager {
         Self { db_pool, sender }
     }
 
-    fn dips(&self, filter: DipsFilter) {
+    fn dips(&self, state: &AppState) {
+        let filter = DipsFilter {
+            scope_id: state.scope.id(),
+            search: Some(state.search.to_owned()),
+        };
         let pool = self.db_pool.clone();
         let sender = self.sender.clone();
         tokio::spawn(async move {
@@ -246,6 +298,33 @@ impl QueryManager {
             let _ = sender.send(Event::DbResponse(DbResult::Dips(res)));
         });
     }
+
+    fn tag_dip(&self, state: &AppState) {
+        let item = state
+            .list_selection_index
+            .and_then(|x| state.scope_dips.get(x));
+        match item {
+            Some(item) => {
+                let tag = state.search.to_owned();
+                let id = item.id.to_owned();
+                let pool = self.db_pool.clone();
+                let sender = self.sender.clone();
+                tokio::spawn(async move {
+                    let mut tx = pool.begin().await.expect("Failed to create transaction");
+                    tag::create_dip_tag(&mut tx, &id, &tag)
+                        .await
+                        .expect("Failed to create a tag for a dip");
+                    tx.commit().await.expect("Failed to commit a tag for a dip");
+                    let _ = sender.send(Event::DbResponse(DbResult::Tag));
+                });
+            }
+            None => {
+                let _ = self
+                    .sender
+                    .send(Event::Error("Could not find item to tag."));
+            }
+        }
+    }
 }
 
 pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> {
@@ -253,14 +332,14 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
     let mut terminal = tui::init()?;
     let mut app_state = AppState::new();
     let (tx, rx) = mpsc::unbounded_channel();
-    let mut events = EventService::new(rx);
+    let mut events = EventService::new(rx, tx.clone());
     let scope = dir_context::get_closest(&config.db_pool, &config.context_dir)
         .await
         .expect("Failed to get dir context");
     app_state.scope = scope;
 
     let query_mgr = QueryManager::new(config.db_pool, tx.clone());
-    let _ = tx.send(Event::DbRequest(DbQuery::Dips(DipsFilter {
+    events.send(Event::DbRequest(DbQuery::Dips(DipsFilter {
         scope_id: app_state.scope.id(),
         search: Some("".into()),
     })));
@@ -286,9 +365,14 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                         frame,
                     ),
                 };
-                match app_state.event_context {
-                    EventCtx::List => render_toolbar(footer, frame),
-                    EventCtx::Search => render_search(&app_state.search, footer, frame),
+                if let Some(err) = app_state.error {
+                    render_error(err, footer, frame);
+                } else {
+                    match app_state.event_context {
+                        EventCtx::List => render_toolbar(footer, frame),
+                        EventCtx::Search => render_search(&app_state.search, footer, frame),
+                        EventCtx::Tag => render_tag(&app_state.search, footer, frame),
+                    }
                 }
             })
             .wrap_err("terminal.draw")?;
@@ -299,20 +383,24 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                 EventCtx::Search => {
                     app_state.event_context = EventCtx::List;
                     app_state.search.clear();
-                    query_mgr.dips(DipsFilter {
-                        scope_id: app_state.scope.id(),
-                        search: None,
-                    })
+                    query_mgr.dips(&app_state)
                 }
-                _ => app_state.mode = Mode::Quit,
+                EventCtx::Tag => {
+                    app_state.event_context = EventCtx::List;
+                    app_state.search.clear();
+                }
+                EventCtx::List => app_state.mode = Mode::Quit,
             },
             Event::DbRequest(query) => match query {
-                DbQuery::Dips(filter) => query_mgr.dips(filter),
+                DbQuery::Dips(_) => query_mgr.dips(&app_state),
             },
             Event::DbResponse(result) => match result {
                 DbResult::Dips(items) => {
                     app_state.scope_dips = items;
                     app_state.list_selection_index = Some(0);
+                }
+                DbResult::Tag => {
+                    query_mgr.dips(&app_state);
                 }
             },
             Event::NavUp => {
@@ -333,30 +421,50 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
             Event::KeyboardChar(c) => match app_state.event_context {
                 EventCtx::Search => {
                     app_state.search.push(c);
-                    query_mgr.dips(DipsFilter {
-                        scope_id: app_state.scope.id(),
-                        search: Some(app_state.search.to_owned()),
-                    })
+                    query_mgr.dips(&app_state)
                 }
-                _ => {}
+                EventCtx::Tag => {
+                    app_state.search.push(c);
+                }
+                EventCtx::List => {}
             },
             Event::KeyboardBackspace => match app_state.event_context {
                 EventCtx::Search => {
                     let _ = app_state.search.pop();
-                    query_mgr.dips(DipsFilter {
-                        scope_id: app_state.scope.id(),
-                        search: Some(app_state.search.to_owned()),
-                    })
+                    query_mgr.dips(&app_state);
                 }
-                _ => {}
+                EventCtx::Tag => {
+                    let _ = app_state.search.pop();
+                }
+                EventCtx::List => {}
             },
-            Event::Command(cmd) => match cmd {
-                Command::Search => {
-                    app_state.event_context = EventCtx::Search;
+            Event::KeyboardEnter => match app_state.event_context {
+                EventCtx::Search => {}
+                EventCtx::List => {}
+                EventCtx::Tag => {
+                    query_mgr.tag_dip(&app_state);
                     app_state.search.clear();
+                    app_state.event_context = EventCtx::List;
                 }
             },
-            _ => {}
+            Event::Command(cmd) => {
+                app_state.error = None;
+                match cmd {
+                    Command::Search => {
+                        app_state.event_context = EventCtx::Search;
+                        app_state.search.clear();
+                    }
+                    Command::Tag => {
+                        app_state.event_context = EventCtx::Tag;
+                        app_state.search.clear();
+                    }
+                }
+            }
+            Event::Error(msg) => {
+                app_state.error = Some(msg);
+                app_state.event_context = EventCtx::List;
+            }
+            Event::UiTick => {}
         }
     }
 
