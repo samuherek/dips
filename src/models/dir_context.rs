@@ -20,7 +20,7 @@ impl ContextScope {
     pub fn id(&self) -> Option<String> {
         match self {
             Self::Dir(dir) => Some(dir.id.to_owned()),
-            Self::Global => None
+            Self::Global => None,
         }
     }
 }

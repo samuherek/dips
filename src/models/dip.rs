@@ -1,7 +1,37 @@
-use crate::models::dir_context::{ContextScope, RuntimeDirContext};
+use crate::models::tag;
 use sqlx::{Sqlite, SqlitePool, Transaction};
+use std::ops::Deref;
 
-#[derive(serde::Serialize, serde::Deserialize, sqlx::FromRow, Debug)]
+#[derive(Debug)]
+pub struct DipsFilter {
+    scope_id: Option<String>,
+    search: Option<String>,
+}
+
+impl DipsFilter {
+    pub fn new() -> Self {
+        Self {
+            scope_id: None,
+            search: None,
+        }
+    }
+
+    pub fn with_scope_id(self, id: Option<String>) -> Self {
+        Self {
+            scope_id: id,
+            ..self
+        }
+    }
+
+    pub fn with_search(self, value: &str) -> Self {
+        Self {
+            search: Some(value.to_owned()),
+            ..self
+        }
+    }
+}
+
+#[derive(serde::Serialize, Debug)]
 pub struct Dip {
     pub id: String,
     pub value: String,
@@ -27,13 +57,10 @@ impl Dip {
     }
 }
 
-#[derive(serde::Deserialize, sqlx::FromRow, Debug)]
-pub struct DisplayDip {
-    pub value: String,
-    dir_path: String,
-}
+#[derive(Debug)]
+pub struct DipTags(Vec<tag::TagMeta>);
 
-#[derive(serde::Deserialize, sqlx::FromRow, Debug)]
+#[derive(Debug, sqlx::FromRow)]
 pub struct DipRowFull {
     pub id: String,
     pub value: String,
@@ -44,37 +71,62 @@ pub struct DipRowFull {
     pub git_remote: Option<String>,
     pub git_dir_name: Option<String>,
     pub dir_path: String,
+    #[sqlx(try_from = "String")]
+    pub tags: DipTags,
 }
 
-impl DisplayDip {
-    pub fn format(&self) -> String {
-        let dir = std::path::PathBuf::from(&self.dir_path);
-        let parent = dir
-            .file_name()
-            .map_or("Global:".into(), |v| v.to_string_lossy());
-        format!("{}: \"{}\"", parent, self.value)
+impl TryFrom<String> for DipTags {
+    type Error = std::convert::Infallible;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        let tags = s
+            .split(',')
+            .filter_map(|tag| {
+                let parts: Vec<&str> = tag.split(':').collect();
+                if parts.len() == 2 {
+                    Some(tag::TagMeta {
+                        id: parts[0].parse().ok()?,
+                        name: parts[1].to_string(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        Ok(DipTags(tags))
     }
 }
 
-pub async fn get_dir_context_all(
+impl Deref for DipTags {
+    type Target = Vec<tag::TagMeta>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+pub async fn get_filterd(
     conn: &SqlitePool,
-    scope: &ContextScope,
-    search: Option<&str>,
+    filter: DipsFilter,
 ) -> Result<Vec<DipRowFull>, sqlx::Error> {
-    let search = format!("%{}%", search.unwrap_or_default());
+    let search = format!("%{}%", filter.search.unwrap_or_default());
     sqlx::query_as(
         r"
        select dips.*, 
             dir_contexts.dir_path, 
             dir_contexts.git_remote, 
-            dir_contexts.git_dir_name 
+            dir_contexts.git_dir_name,
+            GROUP_CONCAT(tags.id || ':' || tags.name) as tags
         from dips
         left join dir_contexts on dips.dir_context_id = dir_contexts.id
+        LEFT JOIN dips_tags ON dips.id = dips_tags.dip_id
+        LEFT JOIN tags ON dips_tags.tag_id = tags.id
         WHERE dips.dir_context_id = $1
         and LOWER(dips.value) LIKE LOWER($2)
+        GROUP BY dips.id
         ",
     )
-    .bind(scope.id())
+    .bind(filter.scope_id)
     .bind(search)
     .fetch_all(conn)
     .await
@@ -86,57 +138,17 @@ pub async fn get_all(conn: &SqlitePool) -> Result<Vec<DipRowFull>, sqlx::Error> 
        select dips.*, 
             dir_contexts.dir_path, 
             dir_contexts.git_remote, 
-            dir_contexts.git_dir_name 
+            dir_contexts.git_dir_name,
+            GROUP_CONCAT(tags.id || ':' || tags.name) as tags
        from dips 
        left join dir_contexts on dips.dir_context_id = dir_contexts.id
+       LEFT JOIN dips_tags ON dips.id = dips_tags.dip_id
+       LEFT JOIN tags ON dips_tags.tag_id = tags.id
+       GROUP BY dips.id
        "#,
     )
     .fetch_all(conn)
     .await
-}
-
-pub async fn db_all(conn: &SqlitePool) -> Option<Vec<DisplayDip>> {
-    match sqlx::query_as(
-        r#"
-        SELECT dips.value, dir_contexts.dir_path 
-        FROM dips 
-        JOIN dir_contexts ON dips.dir_context_id = dir_contexts.id
-        "#,
-    )
-    .fetch_all(conn)
-    .await
-    {
-        Ok(res) => Some(res),
-        Err(e) => {
-            eprintln!("ERROR: failed to query dips: {e}");
-            None
-        }
-    }
-}
-
-pub async fn db_context_all(
-    conn: &SqlitePool,
-    context: &RuntimeDirContext,
-) -> Option<Vec<DisplayDip>> {
-    let dir_path = format!("{}%", context.path());
-    match sqlx::query_as(
-        r#"
-        SELECT dips.value, dir_contexts.dir_path 
-        FROM dips 
-        JOIN dir_contexts ON dips.dir_context_id = dir_contexts.id
-        WHERE dir_contexts.dir_path LIKE ?
-        "#,
-    )
-    .bind(dir_path)
-    .fetch_all(conn)
-    .await
-    {
-        Ok(res) => Some(res),
-        Err(e) => {
-            eprintln!("ERROR: failed to query dips: {e}");
-            None
-        }
-    }
 }
 
 pub async fn create(
@@ -160,22 +172,5 @@ pub async fn create(
     .execute(&mut **tx)
     .await?;
 
-    Ok(item)
-}
-
-pub async fn find_one(
-    pool: &SqlitePool,
-    value: &str,
-    dir_context_id: Option<&str>,
-) -> Result<Option<Dip>, sqlx::Error> {
-    let item = sqlx::query_as(
-        r"
-        select * from dips where value = $1 and dir_context_id = $2 
-        ",
-    )
-    .bind(value)
-    .bind(dir_context_id)
-    .fetch_optional(pool)
-    .await?;
     Ok(item)
 }

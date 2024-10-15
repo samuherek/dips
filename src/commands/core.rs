@@ -1,12 +1,10 @@
 use crate::configuration;
-use crate::models::dip::{self, DipRowFull};
+use crate::models::dip::DipRowFull;
 use crate::models::dir_context::{self, ContextScope};
 use crate::models::tag;
 use crate::tui;
 use color_eyre::eyre::WrapErr;
-use crossterm::event::{
-    Event as CrosstermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-};
+use crossterm::event::{Event as CrosstermEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::stream::StreamExt;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::palette::tailwind::{RED, SLATE};

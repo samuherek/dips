@@ -15,7 +15,7 @@ enum Commands {
     Add {
         input: String,
         #[arg(short = 't', long)]
-        group: Option<String>,
+        tag: Option<String>,
         #[arg(short, long)]
         global: bool,
     },
@@ -23,10 +23,6 @@ enum Commands {
         #[clap(short, long)]
         all: bool,
     },
-    Recipe {
-        input: Option<String>,
-    },
-    Play,
 }
 
 pub async fn run() {
@@ -49,25 +45,12 @@ pub async fn run() {
             };
 
             match cli.command {
-                Some(Commands::Add {
-                    input,
-                    group,
-                    global,
-                }) => {
-                    commands::add::add(&app, &input, group.as_deref(), global).await;
+                Some(Commands::Add { input, tag, global }) => {
+                    commands::add::add(&app, &input, tag.as_deref(), global).await;
                 }
                 Some(Commands::Get { all }) => {
-                    commands::get::get(&app, all).await;
+                    commands::get::exec(&app, all).await;
                 }
-                Some(Commands::Recipe { input }) => {
-                    commands::recipe::recipe(&app, input).await;
-                }
-                Some(Commands::Play) => match commands::play::play(&app) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        eprintln!("ERROR: game errored out: {e}");
-                    }
-                },
                 _ => commands::core::exec(app)
                     .await
                     .expect("Failed to run the app"),

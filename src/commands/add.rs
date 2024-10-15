@@ -2,7 +2,7 @@ use crate::configuration::Application;
 use crate::models::tag;
 use crate::models::{dip, dir_context};
 
-async fn value_exists(app: &Application, value: &str, group: Option<&str>, global: bool) -> bool {
+async fn value_exists(app: &Application, value: &str, global: bool) -> bool {
     // - if dips.value is equal $1 -> additional check
     // additional check for equal value:
     //      - dips.dir_context_id
@@ -38,7 +38,7 @@ async fn value_exists(app: &Application, value: &str, group: Option<&str>, globa
     .is_some()
 }
 
-async fn add_global(app: &Application, value: &str, tag: Option<&str>) {
+async fn add_global(app: &Application, value: &str, _tag: Option<&str>) {
     let mut tx = app
         .db_pool
         .begin()
@@ -77,14 +77,14 @@ async fn add_contextual(app: &Application, value: &str, tag: Option<&str>) {
     tx.commit().await.expect("Failed to commit transaction");
 }
 
-pub async fn add(app: &Application, value: &str, group: Option<&str>, global: bool) {
-    if value_exists(app, value, group, global).await {
+pub async fn add(app: &Application, value: &str, tags: Option<&str>, global: bool) {
+    if value_exists(app, value, global).await {
         println!("{value} is already added in this context.");
     } else {
         if global {
-            add_global(app, value, group).await;
+            add_global(app, value, tags).await;
         } else {
-            add_contextual(app, value, group).await;
+            add_contextual(app, value, tags).await;
         }
 
         println!("Dip {value} added.");

@@ -9,6 +9,12 @@ pub struct Tag {
     pub created_at: chrono::NaiveDateTime,
 }
 
+#[derive(Debug)]
+pub struct TagMeta {
+    pub id: String,
+    pub name: String,
+}
+
 impl Tag {
     fn new(name: &str) -> Self {
         let id = uuid::Uuid::new_v4().to_string();
