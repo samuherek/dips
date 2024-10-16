@@ -6,13 +6,11 @@ use crate::tui;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::{Event as CrosstermEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::stream::StreamExt;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::palette::tailwind::{RED, SLATE, YELLOW};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::style::palette::tailwind::{GRAY, RED, SLATE, YELLOW};
 use ratatui::style::Style;
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, Borders, HighlightSpacing, List, ListItem, ListState, Paragraph, Wrap,
-};
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Block, Borders, HighlightSpacing, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
@@ -35,6 +33,7 @@ enum Confirmation {
 enum View {
     #[default]
     ScopeList,
+    ScopeChange,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -75,18 +74,33 @@ impl AppState {
     }
 }
 
-fn render_header(scope_path: &str, area: Rect, frame: &mut Frame) {
-    let text = Line::from(vec![Span::raw("Scope: "), Span::raw(scope_path)]);
+fn render_scope_header(scope_path: &str, area: Rect, frame: &mut Frame) {
+    let layout = Layout::new(
+        Direction::Horizontal,
+        [Constraint::Min(10), Constraint::Min(10)],
+    );
+    let [left, right] = layout.areas(frame.size());
+    let text = Text::from(format!("Scope: {}", scope_path));
+    let action = Text::styled("< ctrl+p > chnage scope", Style::new().fg(GRAY.c500));
     frame.render_widget(
-        Paragraph::new(text)
-            .block(
-                Block::new()
-                    .borders(Borders::BOTTOM)
-                    .border_style(Style::new().fg(SLATE.c500)),
-            )
-            .wrap(Wrap { trim: true }),
+        Block::new()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::new().fg(SLATE.c500)),
         area,
-    )
+    );
+    frame.render_widget(Paragraph::new(text), left);
+    frame.render_widget(Paragraph::new(action).alignment(Alignment::Right), right);
+}
+
+fn render_context_header(area: Rect, frame: &mut Frame) {
+    let text = Text::from(format!("Scope change"));
+    frame.render_widget(
+        Block::new()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::new().fg(SLATE.c500)),
+        area,
+    );
+    frame.render_widget(Paragraph::new(text), area);
 }
 
 fn render_scope_list(
@@ -104,6 +118,26 @@ fn render_scope_list(
                 Span::from(format!("{}", x.tags.to_string())).style(Style::new().fg(SLATE.c500)),
             ]))
         })
+        .collect::<Vec<_>>();
+    let list = List::new(items)
+        .block(Block::new())
+        .highlight_style(Style::new().bg(SLATE.c800))
+        .highlight_symbol("> ")
+        .highlight_spacing(HighlightSpacing::Always);
+
+    let mut state = ListState::default().with_selected(selected_index);
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn render_context_list(
+    items: &Vec<String>,
+    selected_index: Option<usize>,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let items = items
+        .iter()
+        .map(|x| ListItem::new(Text::from(Span::raw(x.clone()))))
         .collect::<Vec<_>>();
     let list = List::new(items)
         .block(Block::new())
@@ -195,6 +229,7 @@ enum Event {
     Command(Command),
     NavDown,
     NavUp,
+    ChangeScope,
     UiTick,
     Error(&'static str),
 }
@@ -223,6 +258,7 @@ impl EventService {
                 EventCtx::List => match (key_event.code, key_event.modifiers) {
                     (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Event::KeyboardCtrlC),
+                    (KeyCode::Char('p'), KeyModifiers::CONTROL) => Some(Event::ChangeScope),
                     (KeyCode::Char('j'), _) => Some(Event::NavDown),
                     (KeyCode::Char('k'), _) => Some(Event::NavUp),
                     (KeyCode::Char('/'), _) => Some(Event::Command(Command::Search)),
@@ -391,14 +427,25 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                     ],
                 );
                 let [header, main, footer] = layout.areas(frame.size());
-                render_header(&app_state.scope.label(), header, frame);
                 match app_state.view {
-                    View::ScopeList => render_scope_list(
-                        &app_state.scope_dips,
-                        app_state.list_selection_index.to_owned(),
-                        main,
-                        frame,
-                    ),
+                    View::ScopeList => {
+                        render_scope_header(&app_state.scope.label(), header, frame);
+                        render_scope_list(
+                            &app_state.scope_dips,
+                            app_state.list_selection_index.to_owned(),
+                            main,
+                            frame,
+                        );
+                    }
+                    View::ScopeChange => {
+                        render_context_header(header, frame);
+                        render_context_list(
+                            &vec!["test1".to_string(), "test2".to_string()],
+                            app_state.list_selection_index.to_owned(),
+                            main,
+                            frame,
+                        );
+                    }
                 };
                 if let Some(err) = app_state.error {
                     render_error(err, footer, frame);
@@ -442,6 +489,9 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                     query_mgr.dips(&app_state);
                 }
             },
+            Event::ChangeScope => {
+                app_state.view = View::ScopeChange;
+            }
             Event::NavUp => {
                 if let Some(idx) = app_state.list_selection_index {
                     if app_state.scope_dips.len() > 0 {
