@@ -4,6 +4,24 @@ use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
+pub struct ScopesFilter {
+    search: Option<String>,
+}
+
+impl ScopesFilter {
+    pub fn new() -> Self {
+        Self { search: None }
+    }
+
+    pub fn with_search(self, value: &str) -> Self {
+        Self {
+            search: Some(value.to_owned()),
+            ..self
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum ContextScope {
     Dir(DirContext),
     Global,
@@ -25,6 +43,12 @@ impl ContextScope {
     }
 }
 
+impl From<DirContext> for ContextScope {
+    fn from(value: DirContext) -> Self {
+        ContextScope::Dir(value)
+    }
+}
+
 impl From<Option<DirContext>> for ContextScope {
     fn from(value: Option<DirContext>) -> Self {
         match value {
@@ -34,7 +58,7 @@ impl From<Option<DirContext>> for ContextScope {
     }
 }
 
-#[derive(serde::Deserialize, sqlx::FromRow, Debug)]
+#[derive(serde::Deserialize, sqlx::FromRow, Debug, Clone)]
 pub struct DirContext {
     pub id: String,
     pub git_remote: Option<String>,
@@ -57,6 +81,30 @@ impl DirContext {
             updated_at: now,
         }
     }
+}
+
+pub async fn get_filtered(
+    conn: &SqlitePool,
+    filter: ScopesFilter,
+) -> Result<Vec<ContextScope>, sqlx::Error> {
+    let search = format!("%{}%", filter.search.unwrap_or_default()).to_lowercase();
+    let res: Vec<DirContext> = sqlx::query_as(
+        r#"
+        select * from dir_contexts
+        where lower(dir_path) like $1
+        or lower(git_remote) like $1
+        "#,
+    )
+    .bind(&search)
+    .fetch_all(conn)
+    .await?;
+    let add_global = "global".contains(&search) || search == "%%";
+    let items = add_global
+        .then(|| ContextScope::Global)
+        .into_iter()
+        .chain(res.into_iter().map(ContextScope::from))
+        .collect();
+    Ok(items)
 }
 
 pub async fn get_or_create_current(

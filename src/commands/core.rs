@@ -1,6 +1,6 @@
 use crate::configuration;
 use crate::models::dip::{self, DipRowFull, DipsFilter};
-use crate::models::dir_context::{self, ContextScope};
+use crate::models::dir_context::{self, ContextScope, ScopesFilter};
 use crate::models::tag;
 use crate::tui;
 use color_eyre::eyre::WrapErr;
@@ -15,16 +15,17 @@ use ratatui::Frame;
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 enum EventCtx {
     #[default]
     List,
     Search,
+    SearchList,
     Tag,
     Confirm(Confirmation),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum Confirmation {
     Delete,
 }
@@ -49,6 +50,7 @@ struct AppState {
     view: View,
     event_context: EventCtx,
     scope_dips: Vec<DipRowFull>,
+    scope_items: Vec<ContextScope>,
     list_selection_index: Option<usize>,
     search: String,
     scope: ContextScope,
@@ -61,6 +63,7 @@ impl AppState {
             mode: Mode::default(),
             view: View::default(),
             scope_dips: Vec::default(),
+            scope_items: Vec::default(),
             event_context: EventCtx::default(),
             search: String::default(),
             list_selection_index: None,
@@ -130,14 +133,14 @@ fn render_scope_list(
 }
 
 fn render_context_list(
-    items: &Vec<String>,
+    items: &Vec<ContextScope>,
     selected_index: Option<usize>,
     area: Rect,
     frame: &mut Frame,
 ) {
     let items = items
         .iter()
-        .map(|x| ListItem::new(Text::from(Span::raw(x.clone()))))
+        .map(|x| ListItem::new(Text::from(Span::raw(x.label()))))
         .collect::<Vec<_>>();
     let list = List::new(items)
         .block(Block::new())
@@ -164,6 +167,15 @@ fn render_toolbar(area: Rect, frame: &mut Frame) {
 fn render_search(value: &str, area: Rect, frame: &mut Frame) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::raw("Search: "), Span::from(value)]))
+            .block(Block::new()),
+        area,
+    );
+}
+
+fn render_search_list(value: &str, area: Rect, frame: &mut Frame) {
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![Span::raw("Search: "), Span::from(value)]))
+            .style(Style::new().fg(YELLOW.c500))
             .block(Block::new()),
         area,
     );
@@ -201,11 +213,13 @@ fn render_confirm(kind: &Confirmation, value: &str, area: Rect, frame: &mut Fram
 #[derive(Debug)]
 enum DbQuery {
     Dips(DipsFilter),
+    Scopes(ScopesFilter),
 }
 
 #[derive(Debug)]
 enum DbResult {
     Dips(Vec<DipRowFull>),
+    Scopes(Vec<ContextScope>),
     Tag,
     Remove,
 }
@@ -266,6 +280,7 @@ impl EventService {
                     (KeyCode::Char('d'), _) => {
                         Some(Event::Command(Command::Confirm(Confirmation::Delete)))
                     }
+                    (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
                     (_, _) => None,
                 },
                 EventCtx::Search => match (key_event.code, key_event.modifiers) {
@@ -273,6 +288,18 @@ impl EventService {
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Event::KeyboardCtrlC),
                     (KeyCode::Backspace, _) => Some(Event::KeyboardBackspace),
                     (KeyCode::Char(c), _) => Some(Event::KeyboardChar(c)),
+                    (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
+                    (_, _) => None,
+                },
+                EventCtx::SearchList => match (key_event.code, key_event.modifiers) {
+                    (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Event::KeyboardCtrlC),
+                    (KeyCode::Char('j'), _) => Some(Event::NavDown),
+                    (KeyCode::Char('k'), _) => Some(Event::NavUp),
+                    (KeyCode::Char('/'), _) => Some(Event::Command(Command::Search)),
+                    (KeyCode::Char('d'), _) => {
+                        Some(Event::Command(Command::Confirm(Confirmation::Delete)))
+                    }
                     (_, _) => None,
                 },
                 EventCtx::Tag => match (key_event.code, key_event.modifiers) {
@@ -394,6 +421,17 @@ impl QueryManager {
             }
         }
     }
+    fn scopes(&self, state: &AppState) {
+        let pool = self.db_pool.clone();
+        let sender = self.sender.clone();
+        let filter = ScopesFilter::new().with_search(&state.search);
+        tokio::spawn(async move {
+            let res = dir_context::get_filtered(&pool, filter)
+                .await
+                .expect("Failed to query filtered scopes");
+            let _ = sender.send(Event::DbResponse(DbResult::Scopes(res)));
+        });
+    }
 }
 
 pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> {
@@ -440,7 +478,7 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                     View::ScopeChange => {
                         render_context_header(header, frame);
                         render_context_list(
-                            &vec!["test1".to_string(), "test2".to_string()],
+                            &app_state.scope_items,
                             app_state.list_selection_index.to_owned(),
                             main,
                             frame,
@@ -453,6 +491,9 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                     match &app_state.event_context {
                         EventCtx::List => render_toolbar(footer, frame),
                         EventCtx::Search => render_search(&app_state.search, footer, frame),
+                        EventCtx::SearchList => {
+                            render_search_list(&app_state.search, footer, frame)
+                        }
                         EventCtx::Tag => render_tag(&app_state.search, footer, frame),
                         EventCtx::Confirm(kind) => {
                             render_confirm(kind, &app_state.search, footer, frame)
@@ -465,7 +506,7 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
         match events.next(&app_state.event_context).await? {
             Event::KeyboardCtrlC => app_state.mode = Mode::Quit,
             Event::KeyboardEsc => match app_state.event_context {
-                EventCtx::Search => {
+                EventCtx::Search | EventCtx::SearchList => {
                     app_state.event_context = EventCtx::List;
                     app_state.search.clear();
                     query_mgr.dips(&app_state)
@@ -479,6 +520,7 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
             },
             Event::DbRequest(query) => match query {
                 DbQuery::Dips(_) => query_mgr.dips(&app_state),
+                DbQuery::Scopes(_) => query_mgr.scopes(&app_state),
             },
             Event::DbResponse(result) => match result {
                 DbResult::Dips(items) => {
@@ -488,9 +530,14 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                 DbResult::Tag | DbResult::Remove => {
                     query_mgr.dips(&app_state);
                 }
+                DbResult::Scopes(items) => {
+                    app_state.scope_items = items;
+                    app_state.list_selection_index = Some(0);
+                }
             },
             Event::ChangeScope => {
                 app_state.view = View::ScopeChange;
+                query_mgr.scopes(&app_state);
             }
             Event::NavUp => {
                 if let Some(idx) = app_state.list_selection_index {
@@ -515,7 +562,7 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                 EventCtx::Tag | EventCtx::Confirm(_) => {
                     app_state.search.push(c);
                 }
-                EventCtx::List => {}
+                EventCtx::List | EventCtx::SearchList => {}
             },
             Event::KeyboardBackspace => match app_state.event_context {
                 EventCtx::Search => {
@@ -525,11 +572,42 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                 EventCtx::Tag | EventCtx::Confirm(_) => {
                     let _ = app_state.search.pop();
                 }
-                EventCtx::List => {}
+                EventCtx::List | EventCtx::SearchList => {}
             },
             Event::KeyboardEnter => match app_state.event_context {
-                EventCtx::Search => {}
-                EventCtx::List => {}
+                EventCtx::Search => {
+                    app_state.event_context = EventCtx::SearchList;
+                }
+                EventCtx::SearchList => match app_state.view {
+                    View::ScopeChange => {
+                        let item = app_state
+                            .list_selection_index
+                            .and_then(|x| app_state.scope_items.get(x));
+                        if let Some(item) = item {
+                            app_state.scope = item.clone();
+                            app_state.view = View::ScopeList;
+                            app_state.search.clear();
+                            app_state.event_context = EventCtx::List;
+                            query_mgr.dips(&app_state);
+                        }
+                    }
+                    View::ScopeList => {}
+                },
+                EventCtx::List => match app_state.view {
+                    View::ScopeChange => {
+                        let item = app_state
+                            .list_selection_index
+                            .and_then(|x| app_state.scope_items.get(x));
+                        if let Some(item) = item {
+                            app_state.scope = item.clone();
+                            app_state.view = View::ScopeList;
+                            app_state.search.clear();
+                            app_state.event_context = EventCtx::List;
+                            query_mgr.dips(&app_state);
+                        }
+                    }
+                    View::ScopeList => {}
+                },
                 EventCtx::Confirm(_) => {
                     match app_state.search.to_lowercase().as_str() {
                         "n" | "no" => {
@@ -556,8 +634,10 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                 app_state.error = None;
                 match cmd {
                     Command::Search => {
+                        if app_state.event_context != EventCtx::SearchList {
+                            app_state.search.clear();
+                        }
                         app_state.event_context = EventCtx::Search;
-                        app_state.search.clear();
                     }
                     Command::Tag => {
                         app_state.event_context = EventCtx::Tag;
