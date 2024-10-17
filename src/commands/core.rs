@@ -60,7 +60,7 @@ enum PromptStyle {
 enum PromptMode {
     Help,
     Nav,
-    Commad,
+    Input,
     Search,
     Confirm,
     Message,
@@ -72,6 +72,14 @@ struct PromptState {
     msg: Option<&'static str>,
     style: PromptStyle,
     mode: PromptMode,
+}
+
+impl PromptState {
+    fn reset(&mut self) {
+        self.msg = None;
+        self.style = PromptStyle::Normal;
+        self.input.clear();
+    }
 }
 
 impl Default for PromptState {
@@ -187,15 +195,15 @@ impl UiState {
             PageType::Dips => {
                 let scope_id = state.scope.id().expect("Failed to get scope id");
                 let items = state
-                        .data
-                        .dips
-                        .iter()
-                        .map(|(id, _)| id.to_owned())
-                        .collect();
+                    .data
+                    .dips
+                    .iter()
+                    .map(|(id, _)| id.to_owned())
+                    .collect();
                 PageState::Dips {
                     scope_id,
                     index: 0,
-                    items
+                    items,
                 }
             }
             PageType::Help => PageState::Help,
@@ -293,6 +301,7 @@ fn render_dips_page(
     );
 
     let index = if items.len() > 0 { Some(index) } else { None };
+
     let items = items
         .iter()
         .map(|x| {
@@ -330,6 +339,7 @@ fn render_prompt(prompt: &PromptState, area: Rect, frame: &mut Frame) {
             ])
             .style(Style::new().fg(GRAY.c200))
             .alignment(Alignment::Right);
+
             frame.render_widget(left_widget, left);
             frame.render_widget(right_widget, right);
         }
@@ -342,7 +352,46 @@ fn render_prompt(prompt: &PromptState, area: Rect, frame: &mut Frame) {
             .alignment(Alignment::Left);
             frame.render_widget(line, area);
         }
-        _ => todo!(),
+        PromptMode::Input => {
+            let layout = Layout::new(
+                Direction::Horizontal,
+                [Constraint::Min(0), Constraint::Length(20)],
+            );
+            let [left, right] = layout.areas(area);
+            let left_widget = Line::from(vec![Span::raw("Command: "), Span::from(&prompt.input)])
+                .style(Style::new().bg(SLATE.c800));
+            let right_widget = Line::from(vec![
+                Span::styled("To cancel ", Style::new().fg(GRAY.c500)),
+                Span::styled(" Esc ", Style::new().bg(SLATE.c600).fg(GRAY.c400)),
+            ])
+            .style(Style::new().fg(GRAY.c600).bg(SLATE.c800))
+            .alignment(Alignment::Right);
+            frame.render_widget(left_widget, left);
+            frame.render_widget(right_widget, right);
+        }
+        PromptMode::Search => {
+            let layout = Layout::new(
+                Direction::Horizontal,
+                [Constraint::Min(0), Constraint::Length(20)],
+            );
+            let [left, right] = layout.areas(area);
+            let left_widget = Line::from(vec![Span::raw("Search: "), Span::from(&prompt.input)])
+                .style(Style::new().bg(SLATE.c800));
+            let right_widget = Line::from(vec![
+                Span::styled("To cancel ", Style::new().fg(GRAY.c500)),
+                Span::styled(" Esc ", Style::new().bg(SLATE.c600).fg(GRAY.c400)),
+            ])
+            .style(Style::new().fg(GRAY.c600).bg(SLATE.c800))
+            .alignment(Alignment::Right);
+            frame.render_widget(left_widget, left);
+            frame.render_widget(right_widget, right);
+        }
+        PromptMode::Confirm => {
+            todo!()
+        }
+        PromptMode::Message => {
+            todo!()
+        }
     };
 }
 
@@ -360,9 +409,7 @@ fn render_page_with_prompt(state: &AppState, frame: &mut Frame) {
     );
     let [page, prompt] = layout.areas(frame.size());
     match &state.ui.page {
-        PageState::Dips {
-            scope_id, index, ..
-        } => {
+        PageState::Dips { index, .. } => {
             let items = state
                 .data
                 .dips
@@ -402,8 +449,16 @@ enum Command {
 }
 
 #[derive(Debug)]
+enum PromptAction {
+    Focus,
+    Defocus,
+    SearchInit,
+    Input(char),
+    InputBackspace,
+}
+
+#[derive(Debug)]
 enum Action {
-    Escape,
     MoveUp,
     MoveDown,
 }
@@ -424,6 +479,7 @@ enum Event {
     Error(&'static str),
 
     Action(Action),
+    Prompt(PromptAction),
     Nav(PageType),
     NavBack,
     QuitSignal,
@@ -466,13 +522,17 @@ impl EventService {
             KeyCode::Char('?') => Some(Event::Nav(PageType::Help)),
             KeyCode::Char('j') | KeyCode::Down => Some(Event::Action(Action::MoveDown)),
             KeyCode::Char('k') | KeyCode::Up => Some(Event::Action(Action::MoveUp)),
+            KeyCode::Char(':') => Some(Event::Prompt(PromptAction::Focus)),
+            KeyCode::Char('/') => Some(Event::Prompt(PromptAction::SearchInit)),
             _ => None,
         }
     }
 
     fn handle_prompt_events(event: &KeyEvent, _ctx: &AppState) -> Option<Event> {
         match event.code {
-            KeyCode::Esc => Some(Event::Action(Action::Escape)),
+            KeyCode::Esc => Some(Event::Prompt(PromptAction::Defocus)),
+            KeyCode::Backspace => Some(Event::Prompt(PromptAction::InputBackspace)),
+            KeyCode::Char(c) => Some(Event::Prompt(PromptAction::Input(c))),
             _ => None,
         }
     }
@@ -882,7 +942,29 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
             Event::Action(action) => match action {
                 Action::MoveUp => app_state.ui.page.action_move_up(),
                 Action::MoveDown => app_state.ui.page.action_move_down(),
-                _ => todo!(),
+            },
+            Event::Prompt(action) => match action {
+                PromptAction::Focus => {
+                    // TODO: Move out to some function
+                    app_state.ui.event_focus = EventFocusMode::Prompt;
+                    app_state.ui.prompt.reset();
+                    app_state.ui.prompt.mode = PromptMode::Input;
+                }
+                PromptAction::Defocus => {
+                    app_state.ui.event_focus = EventFocusMode::Page;
+                    app_state.ui.prompt.mode = PromptMode::Help;
+                }
+                PromptAction::SearchInit => {
+                    app_state.ui.event_focus = EventFocusMode::Prompt;
+                    app_state.ui.prompt.reset();
+                    app_state.ui.prompt.mode = PromptMode::Search;
+                }
+                PromptAction::Input(c) => {
+                    app_state.ui.prompt.input.push(c);
+                }
+                PromptAction::InputBackspace => {
+                    app_state.ui.prompt.input.pop();
+                }
             },
             Event::Nav(page) => UiState::navigate(&page, &mut app_state),
             Event::NavBack => UiState::navigate_back(&mut app_state),
