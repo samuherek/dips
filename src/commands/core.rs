@@ -9,39 +9,15 @@ use crossterm::event::{
 };
 use futures_util::stream::StreamExt;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::palette::tailwind::{GRAY, RED, SLATE, YELLOW};
+use ratatui::style::palette::tailwind::{GRAY, SLATE};
 use ratatui::style::Style;
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{
-    Block, Borders, HighlightSpacing, List, ListItem, ListState, Paragraph, Widget,
-};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, HighlightSpacing, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use uuid::Uuid;
-
-#[derive(Debug, Default, PartialEq)]
-enum EventCtx {
-    #[default]
-    List,
-    Search,
-    SearchList,
-    Tag,
-    Confirm(Confirmation),
-}
-
-#[derive(Debug, PartialEq)]
-enum Confirmation {
-    Delete,
-}
-
-#[derive(Debug, Default)]
-enum View {
-    #[default]
-    ScopeList,
-    ScopeChange,
-}
 
 #[derive(Debug, Default, PartialEq)]
 enum Mode {
@@ -57,16 +33,6 @@ enum PromptStyle {
     Info,
     Danger,
 }
-
-// #[derive(Debug)]
-// enum PromptMode {
-//     Help,
-//     Nav,
-//     Input,
-//     Search,
-//     Confirm,
-//     Message,
-// }
 
 #[derive(Debug, Default)]
 enum SearchState {
@@ -94,14 +60,6 @@ enum PromptState {
     },
     Confirm,
 }
-
-// #[derive(Debug)]
-// struct PromptState {
-//     input: String,
-//     msg: Option<&'static str>,
-//     style: PromptStyle,
-//     mode: PromptMode,
-// }
 
 impl PromptState {
     fn activate_input_state(&mut self) {
@@ -321,12 +279,10 @@ impl Default for DataState {
 #[derive(Debug)]
 struct AppState {
     mode: Mode,
-    view: View,
 
     ui: UiState,
     data: DataState,
 
-    event_context: EventCtx,
     scope_dips: Vec<DipRowFull>,
     scope_items: Vec<ContextScope>,
     list_selection_index: Option<usize>,
@@ -339,12 +295,10 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             mode: Mode::default(),
-            view: View::default(),
             ui: UiState::default(),
             data: DataState::default(),
             scope_dips: Vec::default(),
             scope_items: Vec::default(),
-            event_context: EventCtx::default(),
             search: String::default(),
             list_selection_index: None,
             scope: ContextScope::Global,
@@ -527,13 +481,6 @@ enum DbResult {
 }
 
 #[derive(Debug)]
-enum Command {
-    Search,
-    Tag,
-    Confirm(Confirmation),
-}
-
-#[derive(Debug)]
 enum PromptAction {
     Focus,
     Defocus,
@@ -553,17 +500,7 @@ enum Action {
 enum Event {
     DbRequest(DbQuery),
     DbResponse(DbResult),
-    KeyboardEsc,
-    KeyboardChar(char),
-    KeyboardBackspace,
-    KeyboardEnter,
-    Command(Command),
-    NavDown,
-    NavUp,
-    ChangeScope,
     UiTick,
-    Error(&'static str),
-
     Action(Action),
     Prompt(PromptAction),
     Nav(PageType),
@@ -624,65 +561,18 @@ impl EventService {
         }
     }
 
-    fn handle_key_events(&self, event: KeyEvent, ctx: &AppState) -> Option<Event> {
+    fn handle_key_events(&self, event: KeyEvent, state: &AppState) -> Option<Event> {
         if let Some(ev) = Self::handle_global_events(&event) {
             return Some(ev);
         }
 
-        match ctx.ui.event_focus {
-            EventFocusMode::Page => match ctx.ui.page {
-                PageState::Help => Self::handle_help_events(&event, ctx),
-                _ => Self::handle_page_events(&event, ctx),
+        match state.ui.event_focus {
+            EventFocusMode::Page => match state.ui.page {
+                PageState::Help => Self::handle_help_events(&event, state),
+                _ => Self::handle_page_events(&event, state),
             },
-            EventFocusMode::Prompt => Self::handle_prompt_events(&event, ctx),
+            EventFocusMode::Prompt => Self::handle_prompt_events(&event, state),
         }
-
-        // match ctx.event_context {
-        //     EventCtx::List => match (event.code, event.modifiers) {
-        //         (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
-        //         (KeyCode::Char('p'), KeyModifiers::CONTROL) => Some(Event::ChangeScope),
-        //         (KeyCode::Char('j'), _) => Some(Event::NavDown),
-        //         (KeyCode::Char('k'), _) => Some(Event::NavUp),
-        //         (KeyCode::Char('/'), _) => Some(Event::Command(Command::Search)),
-        //         (KeyCode::Char('t'), _) => Some(Event::Command(Command::Tag)),
-        //         (KeyCode::Char('d'), _) => {
-        //             Some(Event::Command(Command::Confirm(Confirmation::Delete)))
-        //         }
-        //         (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
-        //         (_, _) => None,
-        //     },
-        //     EventCtx::Search => match (event.code, event.modifiers) {
-        //         (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
-        //         (KeyCode::Backspace, _) => Some(Event::KeyboardBackspace),
-        //         (KeyCode::Char(c), _) => Some(Event::KeyboardChar(c)),
-        //         (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
-        //         (_, _) => None,
-        //     },
-        //     EventCtx::SearchList => match (event.code, event.modifiers) {
-        //         (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
-        //         (KeyCode::Char('j'), _) => Some(Event::NavDown),
-        //         (KeyCode::Char('k'), _) => Some(Event::NavUp),
-        //         (KeyCode::Char('/'), _) => Some(Event::Command(Command::Search)),
-        //         (KeyCode::Char('d'), _) => {
-        //             Some(Event::Command(Command::Confirm(Confirmation::Delete)))
-        //         }
-        //         (_, _) => None,
-        //     },
-        //     EventCtx::Tag => match (event.code, event.modifiers) {
-        //         (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
-        //         (KeyCode::Backspace, _) => Some(Event::KeyboardBackspace),
-        //         (KeyCode::Char(c), _) => Some(Event::KeyboardChar(c)),
-        //         (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
-        //         (_, _) => None,
-        //     },
-        //     EventCtx::Confirm(_) => match (event.code, event.modifiers) {
-        //         (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
-        //         (KeyCode::Char(c), _) => Some(Event::KeyboardChar(c)),
-        //         (KeyCode::Backspace, _) => Some(Event::KeyboardBackspace),
-        //         (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
-        //         (_, _) => None,
-        //     },
-        // }
     }
 
     fn send(&self, event: Event) {
@@ -760,9 +650,7 @@ impl QueryManager {
                 });
             }
             None => {
-                let _ = self
-                    .sender
-                    .send(Event::Error("Could not find item to tag."));
+                todo!("Send error to the prompt");
             }
         }
     }
@@ -784,9 +672,7 @@ impl QueryManager {
                 });
             }
             None => {
-                let _ = self
-                    .sender
-                    .send(Event::Error("Could not find item to tag."));
+                todo!("Send error to the prompt");
             }
         }
     }
@@ -832,71 +718,11 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                 if app_state.ui.page.layout_with_prompt() {
                     render_page_with_prompt(&app_state, frame);
                 }
-
-                // let layout = Layout::new(
-                //     Direction::Vertical,
-                //     vec![
-                //         Constraint::Length(2),
-                //         Constraint::Min(2),
-                //         Constraint::Length(1),
-                //     ],
-                // );
-                // let [page, prompt] = layout.areas(frame.size());
-                // match app_state.view {
-                //     View::ScopeList => {
-                //         render_scope_header(&app_state.scope.label(), header, frame);
-                //         render_scope_list(
-                //             &app_state.scope_dips,
-                //             app_state.list_selection_index.to_owned(),
-                //             main,
-                //             frame,
-                //         );
-                //     }
-                //     View::ScopeChange => {
-                //         render_context_header(header, frame);
-                //         render_context_list(
-                //             &app_state.scope_items,
-                //             app_state.list_selection_index.to_owned(),
-                //             main,
-                //             frame,
-                //         );
-                //     }
-                // };
-                // if let Some(err) = app_state.error {
-                //     render_error(err, footer, frame);
-                // } else {
-                //     match &app_state.event_context {
-                //         EventCtx::List => render_toolbar(footer, frame),
-                //         EventCtx::Search => render_search(&app_state.search, footer, frame),
-                //         EventCtx::SearchList => {
-                //             render_search_list(&app_state.search, footer, frame)
-                //         }
-                //         EventCtx::Tag => render_tag(&app_state.search, footer, frame),
-                //         EventCtx::Confirm(kind) => {
-                //             render_confirm(kind, &app_state.search, footer, frame)
-                //         }
-                //     }
-                // }
             })
             .wrap_err("terminal.draw")?;
 
         match events.next(&app_state).await? {
             Event::QuitSignal => app_state.mode = Mode::Quit,
-            Event::KeyboardEsc => {
-                //     match app_state.event_context {
-                //     EventCtx::Search | EventCtx::SearchList => {
-                //         app_state.event_context = EventCtx::List;
-                //         app_state.search.clear();
-                //         query_mgr.dips(&app_state)
-                //     }
-                //     EventCtx::Tag => {
-                //         app_state.event_context = EventCtx::List;
-                //         app_state.search.clear();
-                //     }
-                //     EventCtx::Confirm(_) => app_state.event_context = EventCtx::List,
-                //     EventCtx::List => app_state.mode = Mode::Quit,
-                // }
-            }
             Event::DbRequest(query) => match query {
                 DbQuery::Dips(_) => query_mgr.dips(&app_state),
                 DbQuery::Scopes(_) => query_mgr.scopes(&app_state),
@@ -913,123 +739,6 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                     app_state.list_selection_index = Some(0);
                 }
             },
-            Event::ChangeScope => {
-                app_state.view = View::ScopeChange;
-                query_mgr.scopes(&app_state);
-            }
-            Event::NavUp => {
-                if let Some(idx) = app_state.list_selection_index {
-                    if app_state.scope_dips.len() > 0 {
-                        app_state.list_selection_index = Some(idx.saturating_sub(1));
-                    }
-                }
-            }
-            Event::NavDown => {
-                if let Some(idx) = app_state.list_selection_index {
-                    if app_state.scope_dips.len() > 0 {
-                        app_state.list_selection_index =
-                            Some(idx.saturating_add(1).min(app_state.scope_dips.len() - 1));
-                    }
-                }
-            }
-            Event::KeyboardChar(c) => match app_state.event_context {
-                EventCtx::Search => {
-                    app_state.search.push(c);
-                    query_mgr.dips(&app_state)
-                }
-                EventCtx::Tag | EventCtx::Confirm(_) => {
-                    app_state.search.push(c);
-                }
-                EventCtx::List | EventCtx::SearchList => {}
-            },
-            Event::KeyboardBackspace => match app_state.event_context {
-                EventCtx::Search => {
-                    let _ = app_state.search.pop();
-                    query_mgr.dips(&app_state);
-                }
-                EventCtx::Tag | EventCtx::Confirm(_) => {
-                    let _ = app_state.search.pop();
-                }
-                EventCtx::List | EventCtx::SearchList => {}
-            },
-            Event::KeyboardEnter => match app_state.event_context {
-                EventCtx::Search => {
-                    app_state.event_context = EventCtx::SearchList;
-                }
-                EventCtx::SearchList => match app_state.view {
-                    View::ScopeChange => {
-                        let item = app_state
-                            .list_selection_index
-                            .and_then(|x| app_state.scope_items.get(x));
-                        if let Some(item) = item {
-                            app_state.scope = item.clone();
-                            app_state.view = View::ScopeList;
-                            app_state.search.clear();
-                            app_state.event_context = EventCtx::List;
-                            query_mgr.dips(&app_state);
-                        }
-                    }
-                    View::ScopeList => {}
-                },
-                EventCtx::List => match app_state.view {
-                    View::ScopeChange => {
-                        let item = app_state
-                            .list_selection_index
-                            .and_then(|x| app_state.scope_items.get(x));
-                        if let Some(item) = item {
-                            app_state.scope = item.clone();
-                            app_state.view = View::ScopeList;
-                            app_state.search.clear();
-                            app_state.event_context = EventCtx::List;
-                            query_mgr.dips(&app_state);
-                        }
-                    }
-                    View::ScopeList => {}
-                },
-                EventCtx::Confirm(_) => {
-                    match app_state.search.to_lowercase().as_str() {
-                        "n" | "no" => {
-                            app_state.search.clear();
-                            app_state.event_context = EventCtx::List;
-                        }
-                        "y" | "yes" => {
-                            query_mgr.remove_dip(&app_state);
-                            app_state.search.clear();
-                            app_state.event_context = EventCtx::List;
-                        }
-                        _ => {
-                            todo!("Add a message that only yes or no is allowed.");
-                        }
-                    };
-                }
-                EventCtx::Tag => {
-                    query_mgr.tag_dip(&app_state);
-                    app_state.search.clear();
-                    app_state.event_context = EventCtx::List;
-                }
-            },
-            Event::Command(cmd) => {
-                app_state.error = None;
-                match cmd {
-                    Command::Search => {
-                        if app_state.event_context != EventCtx::SearchList {
-                            app_state.search.clear();
-                        }
-                        app_state.event_context = EventCtx::Search;
-                    }
-                    Command::Tag => {
-                        app_state.event_context = EventCtx::Tag;
-                        app_state.search.clear();
-                    }
-                    Command::Confirm(value) => {
-                        app_state.event_context = EventCtx::Confirm(value);
-                    }
-                }
-            }
-            Event::Error(msg) => {
-                app_state.error = Some(msg);
-                app_state.event_context = EventCtx::List;
-            }
             Event::UiTick => {}
             Event::Action(action) => match action {
                 Action::MoveUp => app_state.ui.page.action_move_up(),
