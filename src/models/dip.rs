@@ -1,4 +1,5 @@
 use crate::models::tag;
+use sqlx::types::Uuid;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 use std::ops::Deref;
 
@@ -33,7 +34,7 @@ impl DipsFilter {
 
 #[derive(serde::Serialize, Debug)]
 pub struct Dip {
-    pub id: String,
+    pub id: Uuid,
     pub value: String,
     pub note: Option<String>,
     pub dir_context_id: Option<String>,
@@ -43,7 +44,7 @@ pub struct Dip {
 
 impl Dip {
     pub fn new(context_id: Option<&str>, value: &str, note: Option<&str>) -> Self {
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = uuid::Uuid::new_v4();
         let now = chrono::Utc::now().date_naive().into();
         let note = note.map(|v| v.to_string());
         Self {
@@ -71,7 +72,8 @@ impl ToString for DipTags {
 
 #[derive(Debug, sqlx::FromRow)]
 pub struct DipRowFull {
-    pub id: String,
+    #[sqlx(try_from = "uuid::fmt::Hyphenated")]
+    pub id: Uuid,
     pub value: String,
     pub note: Option<String>,
     pub dir_context_id: Option<String>,
@@ -184,7 +186,7 @@ pub async fn create(
     Ok(item)
 }
 
-pub async fn delete(conn: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+pub async fn delete(conn: &SqlitePool, id: &String) -> Result<(), sqlx::Error> {
     let _ = sqlx::query!("DELETE from dips where id = $1", id)
         .execute(conn)
         .await?;

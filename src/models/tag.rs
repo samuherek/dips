@@ -1,4 +1,5 @@
 use sqlx::{Sqlite, Transaction};
+use uuid::Uuid;
 
 pub type Id = String;
 
@@ -54,7 +55,7 @@ pub async fn get_or_create(
 
 pub async fn create_dip_tag(
     tx: &mut Transaction<'_, Sqlite>,
-    dip_id: &str,
+    dip_id: &Uuid,
     value: &str,
 ) -> Result<(), sqlx::Error> {
     let tag_id = get_or_create(tx, value).await?;

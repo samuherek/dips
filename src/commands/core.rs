@@ -4,15 +4,20 @@ use crate::models::dir_context::{self, ContextScope, ScopesFilter};
 use crate::models::tag;
 use crate::tui;
 use color_eyre::eyre::WrapErr;
-use crossterm::event::{Event as CrosstermEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event as CrosstermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+};
 use futures_util::stream::StreamExt;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::palette::tailwind::{GRAY, RED, SLATE, YELLOW};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, HighlightSpacing, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{
+    Block, Borders, HighlightSpacing, List, ListItem, ListState, Paragraph, Widget,
+};
 use ratatui::Frame;
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 #[derive(Debug, Default, PartialEq)]
@@ -45,9 +50,200 @@ enum Mode {
 }
 
 #[derive(Debug)]
+enum PromptStyle {
+    Normal,
+    Info,
+    Danger,
+}
+
+#[derive(Debug)]
+enum PromptMode {
+    Help,
+    Nav,
+    Commad,
+    Search,
+    Confirm,
+    Message,
+}
+
+#[derive(Debug)]
+struct PromptState {
+    input: String,
+    msg: Option<&'static str>,
+    style: PromptStyle,
+    mode: PromptMode,
+}
+
+impl Default for PromptState {
+    fn default() -> Self {
+        Self {
+            input: String::default(),
+            msg: None,
+            style: PromptStyle::Normal,
+            mode: PromptMode::Help,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum PageType {
+    Dips,
+    Scope,
+    Help,
+    Splash,
+}
+
+impl PageType {
+    fn from_page(page: &PageState) -> Self {
+        match page {
+            PageState::Dips { .. } => Self::Dips,
+            PageState::Scope { .. } => Self::Scope,
+            PageState::Help => Self::Help,
+            PageState::Splash => Self::Splash,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum PageState {
+    Splash,
+    Dips {
+        scope_id: String,
+        index: usize,
+        items: Vec<uuid::Uuid>,
+    },
+    Scope {
+        index: usize,
+    },
+    Help,
+}
+
+impl PageState {
+    fn layout_with_prompt(&self) -> bool {
+        true
+    }
+
+    fn page_type(&self) -> PageType {
+        PageType::from_page(self)
+    }
+
+    fn action_move_up(&mut self) {
+        match self {
+            Self::Dips { index, items, .. } => {
+                if !items.is_empty() {
+                    *index = index.saturating_sub(1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn action_move_down(&mut self) {
+        match self {
+            Self::Dips { index, items, .. } => {
+                if !items.is_empty() {
+                    *index = index.saturating_add(1).min(items.len() - 1);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Default for PageState {
+    fn default() -> Self {
+        Self::Splash
+    }
+}
+
+#[derive(Debug)]
+enum EventFocusMode {
+    Page,
+    Prompt,
+}
+
+#[derive(Debug)]
+struct UiState {
+    page: PageState,
+    prompt: PromptState,
+    event_focus: EventFocusMode,
+    back_page: Option<PageType>,
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self {
+            page: PageState::default(),
+            prompt: PromptState::default(),
+            event_focus: EventFocusMode::Page,
+            back_page: None,
+        }
+    }
+}
+
+impl UiState {
+    fn from_type(page: &PageType, state: &AppState) -> PageState {
+        match page {
+            PageType::Dips => {
+                let scope_id = state.scope.id().expect("Failed to get scope id");
+                let items = state
+                        .data
+                        .dips
+                        .iter()
+                        .map(|(id, _)| id.to_owned())
+                        .collect();
+                PageState::Dips {
+                    scope_id,
+                    index: 0,
+                    items
+                }
+            }
+            PageType::Help => PageState::Help,
+            _ => todo!(),
+        }
+    }
+
+    fn navigate(page: &PageType, state: &mut AppState) {
+        state.ui.back_page = Some(state.ui.page.page_type());
+        state.ui.event_focus = EventFocusMode::Page;
+        state.ui.page = UiState::from_type(page, state);
+        // TODO: this is the case only if it's help page for now.
+        state.ui.prompt.mode = PromptMode::Nav;
+    }
+
+    fn navigate_back(state: &mut AppState) {
+        let back_page = state
+            .ui
+            .back_page
+            .as_ref()
+            .expect("Failed to get back page");
+        state.ui.page = UiState::from_type(back_page, state);
+        state.ui.back_page = None;
+        state.ui.prompt.mode = PromptMode::Help;
+    }
+}
+
+#[derive(Debug)]
+struct DataState {
+    dips: HashMap<uuid::Uuid, DipRowFull>,
+}
+
+impl Default for DataState {
+    fn default() -> Self {
+        Self {
+            dips: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Debug)]
 struct AppState {
     mode: Mode,
     view: View,
+
+    ui: UiState,
+    data: DataState,
+
     event_context: EventCtx,
     scope_dips: Vec<DipRowFull>,
     scope_items: Vec<ContextScope>,
@@ -62,6 +258,8 @@ impl AppState {
         Self {
             mode: Mode::default(),
             view: View::default(),
+            ui: UiState::default(),
+            data: DataState::default(),
             scope_dips: Vec::default(),
             scope_items: Vec::default(),
             event_context: EventCtx::default(),
@@ -77,46 +275,29 @@ impl AppState {
     }
 }
 
-fn render_scope_header(scope_path: &str, area: Rect, frame: &mut Frame) {
-    let layout = Layout::new(
-        Direction::Horizontal,
-        [Constraint::Min(10), Constraint::Min(10)],
-    );
-    let [left, right] = layout.areas(frame.size());
-    let text = Text::from(format!("Scope: {}", scope_path));
-    let action = Text::styled("< ctrl+p > chnage scope", Style::new().fg(GRAY.c500));
-    frame.render_widget(
-        Block::new()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::new().fg(SLATE.c500)),
-        area,
-    );
-    frame.render_widget(Paragraph::new(text), left);
-    frame.render_widget(Paragraph::new(action).alignment(Alignment::Right), right);
-}
-
-fn render_context_header(area: Rect, frame: &mut Frame) {
-    let text = Text::from(format!("Scope change"));
-    frame.render_widget(
-        Block::new()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::new().fg(SLATE.c500)),
-        area,
-    );
-    frame.render_widget(Paragraph::new(text), area);
-}
-
-fn render_scope_list(
-    items: &Vec<DipRowFull>,
-    selected_index: Option<usize>,
+fn render_dips_page(
+    scope: &ContextScope,
+    items: Vec<&DipRowFull>,
+    index: usize,
     area: Rect,
     frame: &mut Frame,
 ) {
+    let page_layout = Layout::new(
+        Direction::Vertical,
+        [Constraint::Length(2), Constraint::Min(0)],
+    );
+    let [header, main] = page_layout.areas(area);
+    frame.render_widget(
+        Paragraph::new(Text::from(format!("Scope: {}", scope.label()))),
+        header,
+    );
+
+    let index = if items.len() > 0 { Some(index) } else { None };
     let items = items
         .iter()
         .map(|x| {
             ListItem::new(Line::from(vec![
-                Span::raw(x.value.clone()),
+                Span::raw(x.value.as_str()),
                 Span::raw(" "),
                 Span::from(format!("{}", x.tags.to_string())).style(Style::new().fg(SLATE.c500)),
             ]))
@@ -128,86 +309,75 @@ fn render_scope_list(
         .highlight_symbol("> ")
         .highlight_spacing(HighlightSpacing::Always);
 
-    let mut state = ListState::default().with_selected(selected_index);
-    frame.render_stateful_widget(list, area, &mut state);
+    let mut state = ListState::default().with_selected(index);
+    frame.render_stateful_widget(list, main, &mut state);
 }
 
-fn render_context_list(
-    items: &Vec<ContextScope>,
-    selected_index: Option<usize>,
-    area: Rect,
-    frame: &mut Frame,
-) {
-    let items = items
-        .iter()
-        .map(|x| ListItem::new(Text::from(Span::raw(x.label()))))
-        .collect::<Vec<_>>();
-    let list = List::new(items)
-        .block(Block::new())
-        .highlight_style(Style::new().bg(SLATE.c800))
-        .highlight_symbol("> ")
-        .highlight_spacing(HighlightSpacing::Always);
-
-    let mut state = ListState::default().with_selected(selected_index);
-    frame.render_stateful_widget(list, area, &mut state);
-}
-
-fn render_toolbar(area: Rect, frame: &mut Frame) {
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw("<Esc> to exit"),
-            Span::raw("  |  "),
-            Span::raw("< / > to search"),
-        ]))
-        .block(Block::new()),
-        area,
-    );
-}
-
-fn render_search(value: &str, area: Rect, frame: &mut Frame) {
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![Span::raw("Search: "), Span::from(value)]))
-            .block(Block::new()),
-        area,
-    );
-}
-
-fn render_search_list(value: &str, area: Rect, frame: &mut Frame) {
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![Span::raw("Search: "), Span::from(value)]))
-            .style(Style::new().fg(YELLOW.c500))
-            .block(Block::new()),
-        area,
-    );
-}
-
-fn render_tag(value: &str, area: Rect, frame: &mut Frame) {
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![Span::raw("Tag: "), Span::from(value)])).block(Block::new()),
-        area,
-    );
-}
-
-fn render_error(value: &str, area: Rect, frame: &mut Frame) {
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![Span::raw("Error: "), Span::from(value)]))
-            .style(Style::new().fg(RED.c500)),
-        area,
-    );
-}
-
-fn render_confirm(kind: &Confirmation, value: &str, area: Rect, frame: &mut Frame) {
-    let t = match kind {
-        Confirmation::Delete => "DELETE:",
+fn render_prompt(prompt: &PromptState, area: Rect, frame: &mut Frame) {
+    match prompt.mode {
+        PromptMode::Help => {
+            let layout = Layout::new(Direction::Horizontal, Constraint::from_fills([1, 1]));
+            let [left, right] = layout.areas(area);
+            let left_widget =
+                Line::from("Type : to start a command").style(Style::new().fg(GRAY.c500));
+            let right_widget = Line::from(vec![
+                Span::raw("   Search "),
+                Span::styled(" / ", Style::new().bg(SLATE.c800).fg(GRAY.c400)),
+                Span::raw("   Help "),
+                Span::styled(" ? ", Style::new().bg(SLATE.c800).fg(GRAY.c400)),
+                Span::raw("   Exit "),
+                Span::styled(" C-c ", Style::new().bg(SLATE.c800).fg(GRAY.c400)),
+            ])
+            .style(Style::new().fg(GRAY.c200))
+            .alignment(Alignment::Right);
+            frame.render_widget(left_widget, left);
+            frame.render_widget(right_widget, right);
+        }
+        PromptMode::Nav => {
+            let line = Line::from(vec![
+                Span::raw(" Go back "),
+                Span::styled(" Esc ", Style::new().bg(SLATE.c800).fg(GRAY.c400)),
+            ])
+            .style(Style::new().fg(GRAY.c200))
+            .alignment(Alignment::Left);
+            frame.render_widget(line, area);
+        }
+        _ => todo!(),
     };
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::from(t).style(Style::new().fg(YELLOW.c500)),
-            Span::from(" Are you sure? y/n: ").style(Style::new().fg(YELLOW.c500)),
-            Span::from(value),
-        ])),
-        area,
+}
+
+fn render_help_page(area: Rect, frame: &mut Frame) {
+    let text = Paragraph::new(Line::from(
+        "This is some awesome help text I need to figure out.",
+    ));
+    frame.render_widget(text, area);
+}
+
+fn render_page_with_prompt(state: &AppState, frame: &mut Frame) {
+    let layout = Layout::new(
+        Direction::Vertical,
+        vec![Constraint::Min(2), Constraint::Length(1)],
     );
+    let [page, prompt] = layout.areas(frame.size());
+    match &state.ui.page {
+        PageState::Dips {
+            scope_id, index, ..
+        } => {
+            let items = state
+                .data
+                .dips
+                .iter()
+                .map(|(_, val)| val)
+                .collect::<Vec<_>>();
+            let scope = &state.scope;
+            render_dips_page(scope, items, *index, page, frame);
+        }
+        PageState::Help => {
+            render_help_page(page, frame);
+        }
+        _ => {}
+    };
+    render_prompt(&state.ui.prompt, prompt, frame);
 }
 
 #[derive(Debug)]
@@ -232,11 +402,17 @@ enum Command {
 }
 
 #[derive(Debug)]
+enum Action {
+    Escape,
+    MoveUp,
+    MoveDown,
+}
+
+#[derive(Debug)]
 enum Event {
     DbRequest(DbQuery),
     DbResponse(DbResult),
     KeyboardEsc,
-    KeyboardCtrlC,
     KeyboardChar(char),
     KeyboardBackspace,
     KeyboardEnter,
@@ -246,6 +422,11 @@ enum Event {
     ChangeScope,
     UiTick,
     Error(&'static str),
+
+    Action(Action),
+    Nav(PageType),
+    NavBack,
+    QuitSignal,
 }
 
 struct EventService {
@@ -266,61 +447,95 @@ impl EventService {
         }
     }
 
-    fn handle_crossterm(&self, event: CrosstermEvent, ctx: &EventCtx) -> Option<Event> {
-        match event {
-            CrosstermEvent::Key(key_event) if key_event.kind == KeyEventKind::Press => match ctx {
-                EventCtx::List => match (key_event.code, key_event.modifiers) {
-                    (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
-                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Event::KeyboardCtrlC),
-                    (KeyCode::Char('p'), KeyModifiers::CONTROL) => Some(Event::ChangeScope),
-                    (KeyCode::Char('j'), _) => Some(Event::NavDown),
-                    (KeyCode::Char('k'), _) => Some(Event::NavUp),
-                    (KeyCode::Char('/'), _) => Some(Event::Command(Command::Search)),
-                    (KeyCode::Char('t'), _) => Some(Event::Command(Command::Tag)),
-                    (KeyCode::Char('d'), _) => {
-                        Some(Event::Command(Command::Confirm(Confirmation::Delete)))
-                    }
-                    (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
-                    (_, _) => None,
-                },
-                EventCtx::Search => match (key_event.code, key_event.modifiers) {
-                    (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
-                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Event::KeyboardCtrlC),
-                    (KeyCode::Backspace, _) => Some(Event::KeyboardBackspace),
-                    (KeyCode::Char(c), _) => Some(Event::KeyboardChar(c)),
-                    (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
-                    (_, _) => None,
-                },
-                EventCtx::SearchList => match (key_event.code, key_event.modifiers) {
-                    (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
-                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Event::KeyboardCtrlC),
-                    (KeyCode::Char('j'), _) => Some(Event::NavDown),
-                    (KeyCode::Char('k'), _) => Some(Event::NavUp),
-                    (KeyCode::Char('/'), _) => Some(Event::Command(Command::Search)),
-                    (KeyCode::Char('d'), _) => {
-                        Some(Event::Command(Command::Confirm(Confirmation::Delete)))
-                    }
-                    (_, _) => None,
-                },
-                EventCtx::Tag => match (key_event.code, key_event.modifiers) {
-                    (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
-                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Event::KeyboardCtrlC),
-                    (KeyCode::Backspace, _) => Some(Event::KeyboardBackspace),
-                    (KeyCode::Char(c), _) => Some(Event::KeyboardChar(c)),
-                    (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
-                    (_, _) => None,
-                },
-                EventCtx::Confirm(_) => match (key_event.code, key_event.modifiers) {
-                    (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
-                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Event::KeyboardCtrlC),
-                    (KeyCode::Char(c), _) => Some(Event::KeyboardChar(c)),
-                    (KeyCode::Backspace, _) => Some(Event::KeyboardBackspace),
-                    (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
-                    (_, _) => None,
-                },
-            },
+    fn handle_global_events(event: &KeyEvent) -> Option<Event> {
+        match (event.code, event.modifiers) {
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Event::QuitSignal),
             _ => None,
         }
+    }
+
+    fn handle_help_events(event: &KeyEvent, _ctx: &AppState) -> Option<Event> {
+        match event.code {
+            KeyCode::Esc => Some(Event::NavBack),
+            _ => None,
+        }
+    }
+
+    fn handle_page_events(event: &KeyEvent, _ctx: &AppState) -> Option<Event> {
+        match event.code {
+            KeyCode::Char('?') => Some(Event::Nav(PageType::Help)),
+            KeyCode::Char('j') | KeyCode::Down => Some(Event::Action(Action::MoveDown)),
+            KeyCode::Char('k') | KeyCode::Up => Some(Event::Action(Action::MoveUp)),
+            _ => None,
+        }
+    }
+
+    fn handle_prompt_events(event: &KeyEvent, _ctx: &AppState) -> Option<Event> {
+        match event.code {
+            KeyCode::Esc => Some(Event::Action(Action::Escape)),
+            _ => None,
+        }
+    }
+
+    fn handle_key_events(&self, event: KeyEvent, ctx: &AppState) -> Option<Event> {
+        if let Some(ev) = Self::handle_global_events(&event) {
+            return Some(ev);
+        }
+
+        match ctx.ui.event_focus {
+            EventFocusMode::Page => match ctx.ui.page {
+                PageState::Help => Self::handle_help_events(&event, ctx),
+                _ => Self::handle_page_events(&event, ctx),
+            },
+            EventFocusMode::Prompt => Self::handle_prompt_events(&event, ctx),
+        }
+
+        // match ctx.event_context {
+        //     EventCtx::List => match (event.code, event.modifiers) {
+        //         (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
+        //         (KeyCode::Char('p'), KeyModifiers::CONTROL) => Some(Event::ChangeScope),
+        //         (KeyCode::Char('j'), _) => Some(Event::NavDown),
+        //         (KeyCode::Char('k'), _) => Some(Event::NavUp),
+        //         (KeyCode::Char('/'), _) => Some(Event::Command(Command::Search)),
+        //         (KeyCode::Char('t'), _) => Some(Event::Command(Command::Tag)),
+        //         (KeyCode::Char('d'), _) => {
+        //             Some(Event::Command(Command::Confirm(Confirmation::Delete)))
+        //         }
+        //         (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
+        //         (_, _) => None,
+        //     },
+        //     EventCtx::Search => match (event.code, event.modifiers) {
+        //         (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
+        //         (KeyCode::Backspace, _) => Some(Event::KeyboardBackspace),
+        //         (KeyCode::Char(c), _) => Some(Event::KeyboardChar(c)),
+        //         (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
+        //         (_, _) => None,
+        //     },
+        //     EventCtx::SearchList => match (event.code, event.modifiers) {
+        //         (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
+        //         (KeyCode::Char('j'), _) => Some(Event::NavDown),
+        //         (KeyCode::Char('k'), _) => Some(Event::NavUp),
+        //         (KeyCode::Char('/'), _) => Some(Event::Command(Command::Search)),
+        //         (KeyCode::Char('d'), _) => {
+        //             Some(Event::Command(Command::Confirm(Confirmation::Delete)))
+        //         }
+        //         (_, _) => None,
+        //     },
+        //     EventCtx::Tag => match (event.code, event.modifiers) {
+        //         (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
+        //         (KeyCode::Backspace, _) => Some(Event::KeyboardBackspace),
+        //         (KeyCode::Char(c), _) => Some(Event::KeyboardChar(c)),
+        //         (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
+        //         (_, _) => None,
+        //     },
+        //     EventCtx::Confirm(_) => match (event.code, event.modifiers) {
+        //         (KeyCode::Esc, _) => Some(Event::KeyboardEsc),
+        //         (KeyCode::Char(c), _) => Some(Event::KeyboardChar(c)),
+        //         (KeyCode::Backspace, _) => Some(Event::KeyboardBackspace),
+        //         (KeyCode::Enter, _) => Some(Event::KeyboardEnter),
+        //         (_, _) => None,
+        //     },
+        // }
     }
 
     fn send(&self, event: Event) {
@@ -329,12 +544,19 @@ impl EventService {
         }
     }
 
-    async fn next(&mut self, ctx: &EventCtx) -> color_eyre::Result<Event> {
+    async fn next(&mut self, ctx: &AppState) -> color_eyre::Result<Event> {
         loop {
             let ev = tokio::select! {
                 event = self.events.recv() => event,
                 event = self.crossterm_events.next() => match event {
-                    Some(Ok(ev)) => self.handle_crossterm(ev, ctx),
+                    Some(Ok(ev)) => {
+                    match ev {
+                        CrosstermEvent::Key(key_event) if key_event.kind == KeyEventKind::Press => {
+                           self.handle_key_events(key_event, ctx)
+                        },
+                        _ => None
+                    }
+                    }
                     Some(Err(_)) => None,
                     None => None
                 },
@@ -408,7 +630,7 @@ impl QueryManager {
                 let pool = self.db_pool.clone();
                 let sender = self.sender.clone();
                 tokio::spawn(async move {
-                    dip::delete(&pool, &id)
+                    dip::delete(&pool, &id.to_string())
                         .await
                         .expect("Failed to delete a dip");
                     let _ = sender.send(Event::DbResponse(DbResult::Remove));
@@ -456,55 +678,59 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
     while app_state.is_running() {
         terminal
             .draw(|frame| {
-                let layout = Layout::new(
-                    Direction::Vertical,
-                    vec![
-                        Constraint::Length(2),
-                        Constraint::Min(2),
-                        Constraint::Length(1),
-                    ],
-                );
-                let [header, main, footer] = layout.areas(frame.size());
-                match app_state.view {
-                    View::ScopeList => {
-                        render_scope_header(&app_state.scope.label(), header, frame);
-                        render_scope_list(
-                            &app_state.scope_dips,
-                            app_state.list_selection_index.to_owned(),
-                            main,
-                            frame,
-                        );
-                    }
-                    View::ScopeChange => {
-                        render_context_header(header, frame);
-                        render_context_list(
-                            &app_state.scope_items,
-                            app_state.list_selection_index.to_owned(),
-                            main,
-                            frame,
-                        );
-                    }
-                };
-                if let Some(err) = app_state.error {
-                    render_error(err, footer, frame);
-                } else {
-                    match &app_state.event_context {
-                        EventCtx::List => render_toolbar(footer, frame),
-                        EventCtx::Search => render_search(&app_state.search, footer, frame),
-                        EventCtx::SearchList => {
-                            render_search_list(&app_state.search, footer, frame)
-                        }
-                        EventCtx::Tag => render_tag(&app_state.search, footer, frame),
-                        EventCtx::Confirm(kind) => {
-                            render_confirm(kind, &app_state.search, footer, frame)
-                        }
-                    }
+                if app_state.ui.page.layout_with_prompt() {
+                    render_page_with_prompt(&app_state, frame);
                 }
+
+                // let layout = Layout::new(
+                //     Direction::Vertical,
+                //     vec![
+                //         Constraint::Length(2),
+                //         Constraint::Min(2),
+                //         Constraint::Length(1),
+                //     ],
+                // );
+                // let [page, prompt] = layout.areas(frame.size());
+                // match app_state.view {
+                //     View::ScopeList => {
+                //         render_scope_header(&app_state.scope.label(), header, frame);
+                //         render_scope_list(
+                //             &app_state.scope_dips,
+                //             app_state.list_selection_index.to_owned(),
+                //             main,
+                //             frame,
+                //         );
+                //     }
+                //     View::ScopeChange => {
+                //         render_context_header(header, frame);
+                //         render_context_list(
+                //             &app_state.scope_items,
+                //             app_state.list_selection_index.to_owned(),
+                //             main,
+                //             frame,
+                //         );
+                //     }
+                // };
+                // if let Some(err) = app_state.error {
+                //     render_error(err, footer, frame);
+                // } else {
+                //     match &app_state.event_context {
+                //         EventCtx::List => render_toolbar(footer, frame),
+                //         EventCtx::Search => render_search(&app_state.search, footer, frame),
+                //         EventCtx::SearchList => {
+                //             render_search_list(&app_state.search, footer, frame)
+                //         }
+                //         EventCtx::Tag => render_tag(&app_state.search, footer, frame),
+                //         EventCtx::Confirm(kind) => {
+                //             render_confirm(kind, &app_state.search, footer, frame)
+                //         }
+                //     }
+                // }
             })
             .wrap_err("terminal.draw")?;
 
-        match events.next(&app_state.event_context).await? {
-            Event::KeyboardCtrlC => app_state.mode = Mode::Quit,
+        match events.next(&app_state).await? {
+            Event::QuitSignal => app_state.mode = Mode::Quit,
             Event::KeyboardEsc => match app_state.event_context {
                 EventCtx::Search | EventCtx::SearchList => {
                     app_state.event_context = EventCtx::List;
@@ -524,8 +750,8 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
             },
             Event::DbResponse(result) => match result {
                 DbResult::Dips(items) => {
-                    app_state.scope_dips = items;
-                    app_state.list_selection_index = Some(0);
+                    app_state.data.dips = items.into_iter().map(|x| (x.id.to_owned(), x)).collect();
+                    app_state.ui.page = UiState::from_type(&PageType::Dips, &app_state);
                 }
                 DbResult::Tag | DbResult::Remove => {
                     query_mgr.dips(&app_state);
@@ -653,6 +879,13 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                 app_state.event_context = EventCtx::List;
             }
             Event::UiTick => {}
+            Event::Action(action) => match action {
+                Action::MoveUp => app_state.ui.page.action_move_up(),
+                Action::MoveDown => app_state.ui.page.action_move_down(),
+                _ => todo!(),
+            },
+            Event::Nav(page) => UiState::navigate(&page, &mut app_state),
+            Event::NavBack => UiState::navigate_back(&mut app_state),
         }
     }
 
