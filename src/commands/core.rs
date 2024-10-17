@@ -19,6 +19,7 @@ use ratatui::Frame;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 #[derive(Debug, Default, PartialEq)]
 enum EventCtx {
@@ -49,53 +50,133 @@ enum Mode {
     Quit,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum PromptStyle {
+    #[default]
     Normal,
     Info,
     Danger,
 }
 
-#[derive(Debug)]
-enum PromptMode {
+// #[derive(Debug)]
+// enum PromptMode {
+//     Help,
+//     Nav,
+//     Input,
+//     Search,
+//     Confirm,
+//     Message,
+// }
+
+#[derive(Debug, Default)]
+enum SearchState {
+    #[default]
+    Active,
+    Commit,
+}
+
+#[derive(Debug, Default)]
+enum PromptState {
+    #[default]
     Help,
     Nav,
-    Input,
-    Search,
+    Input {
+        input: String,
+    },
+    Search {
+        input: String,
+        style: PromptStyle,
+        state: SearchState,
+    },
+    Message {
+        value: &'static str,
+        style: PromptStyle,
+    },
     Confirm,
-    Message,
 }
 
-#[derive(Debug)]
-struct PromptState {
-    input: String,
-    msg: Option<&'static str>,
-    style: PromptStyle,
-    mode: PromptMode,
-}
+// #[derive(Debug)]
+// struct PromptState {
+//     input: String,
+//     msg: Option<&'static str>,
+//     style: PromptStyle,
+//     mode: PromptMode,
+// }
 
 impl PromptState {
-    fn reset(&mut self) {
-        self.msg = None;
-        self.style = PromptStyle::Normal;
-        self.input.clear();
+    fn activate_input_state(&mut self) {
+        *self = Self::Input {
+            input: String::new(),
+        }
     }
-}
 
-impl Default for PromptState {
-    fn default() -> Self {
-        Self {
-            input: String::default(),
-            msg: None,
-            style: PromptStyle::Normal,
-            mode: PromptMode::Help,
+    fn activate_help_state(&mut self) {
+        *self = Self::Help
+    }
+
+    fn activate_search_state(&mut self) {
+        *self = Self::Search {
+            input: Default::default(),
+            style: Default::default(),
+            state: Default::default(),
+        }
+    }
+
+    fn activate_nav_state(&mut self) {
+        *self = Self::Nav;
+    }
+
+    fn set_input(&mut self, c: char) -> bool {
+        match self {
+            Self::Search { input, .. } | Self::Input { input, .. } => {
+                input.push(c);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn set_input_backspace(&mut self) {
+        match self {
+            Self::Search { input, .. } | Self::Input { input, .. } => {
+                input.pop();
+            }
+            _ => {}
+        }
+    }
+
+    fn set_error(&mut self, value: &'static str) {
+        *self = Self::Message {
+            value,
+            style: PromptStyle::Danger,
+        }
+    }
+
+    fn set_submit(&mut self) {
+        match self {
+            Self::Search { state, .. } => {
+                if let SearchState::Active = state {
+                    *state = SearchState::Commit;
+                }
+            }
+            _ => {
+                self.set_error("Invalid submit state");
+            }
+        }
+    }
+
+    fn get_search_input(&self) -> &str {
+        if let Self::Search { input, .. } = self {
+            input.as_str()
+        } else {
+            ""
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum PageType {
-    Dips,
+    Dips { scope_id: Uuid },
     Scope,
     Help,
     Splash,
@@ -104,7 +185,9 @@ enum PageType {
 impl PageType {
     fn from_page(page: &PageState) -> Self {
         match page {
-            PageState::Dips { .. } => Self::Dips,
+            PageState::Dips { scope_id, .. } => Self::Dips {
+                scope_id: scope_id.clone(),
+            },
             PageState::Scope { .. } => Self::Scope,
             PageState::Help => Self::Help,
             PageState::Splash => Self::Splash,
@@ -116,9 +199,9 @@ impl PageType {
 enum PageState {
     Splash,
     Dips {
-        scope_id: String,
+        scope_id: Uuid,
         index: usize,
-        items: Vec<uuid::Uuid>,
+        items: Vec<Uuid>,
     },
     Scope {
         index: usize,
@@ -190,18 +273,12 @@ impl Default for UiState {
 }
 
 impl UiState {
-    fn from_type(page: &PageType, state: &AppState) -> PageState {
+    fn from_type(page: &PageType, data: &DataState) -> PageState {
         match page {
-            PageType::Dips => {
-                let scope_id = state.scope.id().expect("Failed to get scope id");
-                let items = state
-                    .data
-                    .dips
-                    .iter()
-                    .map(|(id, _)| id.to_owned())
-                    .collect();
+            PageType::Dips { scope_id } => {
+                let items = data.dips.iter().map(|(id, _)| id.to_owned()).collect();
                 PageState::Dips {
-                    scope_id,
+                    scope_id: *scope_id,
                     index: 0,
                     items,
                 }
@@ -211,23 +288,20 @@ impl UiState {
         }
     }
 
-    fn navigate(page: &PageType, state: &mut AppState) {
-        state.ui.back_page = Some(state.ui.page.page_type());
-        state.ui.event_focus = EventFocusMode::Page;
-        state.ui.page = UiState::from_type(page, state);
+    fn navigate(&mut self, page: &PageType, data: &DataState) {
+        self.back_page = Some(self.page.page_type());
+        self.event_focus = EventFocusMode::Page;
+        self.page = UiState::from_type(page, data);
         // TODO: this is the case only if it's help page for now.
-        state.ui.prompt.mode = PromptMode::Nav;
+        if page == &PageType::Help {
+            self.prompt.activate_nav_state();
+        }
     }
 
-    fn navigate_back(state: &mut AppState) {
-        let back_page = state
-            .ui
-            .back_page
-            .as_ref()
-            .expect("Failed to get back page");
-        state.ui.page = UiState::from_type(back_page, state);
-        state.ui.back_page = None;
-        state.ui.prompt.mode = PromptMode::Help;
+    fn navigate_back(&mut self, page: &PageType, data: &DataState) {
+        self.page = UiState::from_type(page, data);
+        self.back_page = None;
+        self.prompt.activate_help_state();
     }
 }
 
@@ -283,6 +357,16 @@ impl AppState {
     }
 }
 
+fn dips_page_items<'a>(
+    dips: &'a HashMap<uuid::Uuid, DipRowFull>,
+    search: &str,
+) -> Vec<&'a DipRowFull> {
+    dips.iter()
+        .map(|(_, val)| val)
+        .filter(|x| x.value.contains(search))
+        .collect::<Vec<_>>()
+}
+
 fn render_dips_page(
     scope: &ContextScope,
     items: Vec<&DipRowFull>,
@@ -292,12 +376,18 @@ fn render_dips_page(
 ) {
     let page_layout = Layout::new(
         Direction::Vertical,
-        [Constraint::Length(2), Constraint::Min(0)],
+        [
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ],
     );
-    let [header, main] = page_layout.areas(area);
+    let [header, border, main] = page_layout.areas(area);
+    let scope_text = format!("  {}", scope.label());
+    frame.render_widget(Paragraph::new(Line::from(scope_text)), header);
     frame.render_widget(
-        Paragraph::new(Text::from(format!("Scope: {}", scope.label()))),
-        header,
+        Paragraph::new(Span::styled("  -------", Style::new().fg(GRAY.c500))),
+        border,
     );
 
     let index = if items.len() > 0 { Some(index) } else { None };
@@ -323,8 +413,8 @@ fn render_dips_page(
 }
 
 fn render_prompt(prompt: &PromptState, area: Rect, frame: &mut Frame) {
-    match prompt.mode {
-        PromptMode::Help => {
+    match prompt {
+        PromptState::Help => {
             let layout = Layout::new(Direction::Horizontal, Constraint::from_fills([1, 1]));
             let [left, right] = layout.areas(area);
             let left_widget =
@@ -343,7 +433,7 @@ fn render_prompt(prompt: &PromptState, area: Rect, frame: &mut Frame) {
             frame.render_widget(left_widget, left);
             frame.render_widget(right_widget, right);
         }
-        PromptMode::Nav => {
+        PromptState::Nav => {
             let line = Line::from(vec![
                 Span::raw(" Go back "),
                 Span::styled(" Esc ", Style::new().bg(SLATE.c800).fg(GRAY.c400)),
@@ -352,13 +442,13 @@ fn render_prompt(prompt: &PromptState, area: Rect, frame: &mut Frame) {
             .alignment(Alignment::Left);
             frame.render_widget(line, area);
         }
-        PromptMode::Input => {
+        PromptState::Input { input } => {
             let layout = Layout::new(
                 Direction::Horizontal,
                 [Constraint::Min(0), Constraint::Length(20)],
             );
             let [left, right] = layout.areas(area);
-            let left_widget = Line::from(vec![Span::raw("Command: "), Span::from(&prompt.input)])
+            let left_widget = Line::from(vec![Span::raw("Command: "), Span::from(input)])
                 .style(Style::new().bg(SLATE.c800));
             let right_widget = Line::from(vec![
                 Span::styled("To cancel ", Style::new().fg(GRAY.c500)),
@@ -369,13 +459,13 @@ fn render_prompt(prompt: &PromptState, area: Rect, frame: &mut Frame) {
             frame.render_widget(left_widget, left);
             frame.render_widget(right_widget, right);
         }
-        PromptMode::Search => {
+        PromptState::Search { input, .. } => {
             let layout = Layout::new(
                 Direction::Horizontal,
                 [Constraint::Min(0), Constraint::Length(20)],
             );
             let [left, right] = layout.areas(area);
-            let left_widget = Line::from(vec![Span::raw("Search: "), Span::from(&prompt.input)])
+            let left_widget = Line::from(vec![Span::raw("Search: "), Span::from(input)])
                 .style(Style::new().bg(SLATE.c800));
             let right_widget = Line::from(vec![
                 Span::styled("To cancel ", Style::new().fg(GRAY.c500)),
@@ -386,10 +476,10 @@ fn render_prompt(prompt: &PromptState, area: Rect, frame: &mut Frame) {
             frame.render_widget(left_widget, left);
             frame.render_widget(right_widget, right);
         }
-        PromptMode::Confirm => {
+        PromptState::Confirm => {
             todo!()
         }
-        PromptMode::Message => {
+        PromptState::Message { .. } => {
             todo!()
         }
     };
@@ -410,12 +500,7 @@ fn render_page_with_prompt(state: &AppState, frame: &mut Frame) {
     let [page, prompt] = layout.areas(frame.size());
     match &state.ui.page {
         PageState::Dips { index, .. } => {
-            let items = state
-                .data
-                .dips
-                .iter()
-                .map(|(_, val)| val)
-                .collect::<Vec<_>>();
+            let items = dips_page_items(&state.data.dips, state.ui.prompt.get_search_input());
             let scope = &state.scope;
             render_dips_page(scope, items, *index, page, frame);
         }
@@ -455,6 +540,7 @@ enum PromptAction {
     SearchInit,
     Input(char),
     InputBackspace,
+    Submit,
 }
 
 #[derive(Debug)]
@@ -533,6 +619,7 @@ impl EventService {
             KeyCode::Esc => Some(Event::Prompt(PromptAction::Defocus)),
             KeyCode::Backspace => Some(Event::Prompt(PromptAction::InputBackspace)),
             KeyCode::Char(c) => Some(Event::Prompt(PromptAction::Input(c))),
+            KeyCode::Enter => Some(Event::Prompt(PromptAction::Submit)),
             _ => None,
         }
     }
@@ -729,11 +816,15 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
 
     let query_mgr = QueryManager::new(config.db_pool, tx.clone());
 
+    // TODO: create a bootstrap query and setup
     events.send(Event::DbRequest(DbQuery::Dips(
         DipsFilter::new()
             .with_scope_id(app_state.scope.id())
             .with_search(""),
     )));
+    // events.send(Event::Nav(PageType::Dips {
+    //     scope_id: scope.id().expect("Have initial scope!!!"),
+    // }));
 
     while app_state.is_running() {
         terminal
@@ -791,19 +882,21 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
 
         match events.next(&app_state).await? {
             Event::QuitSignal => app_state.mode = Mode::Quit,
-            Event::KeyboardEsc => match app_state.event_context {
-                EventCtx::Search | EventCtx::SearchList => {
-                    app_state.event_context = EventCtx::List;
-                    app_state.search.clear();
-                    query_mgr.dips(&app_state)
-                }
-                EventCtx::Tag => {
-                    app_state.event_context = EventCtx::List;
-                    app_state.search.clear();
-                }
-                EventCtx::Confirm(_) => app_state.event_context = EventCtx::List,
-                EventCtx::List => app_state.mode = Mode::Quit,
-            },
+            Event::KeyboardEsc => {
+                //     match app_state.event_context {
+                //     EventCtx::Search | EventCtx::SearchList => {
+                //         app_state.event_context = EventCtx::List;
+                //         app_state.search.clear();
+                //         query_mgr.dips(&app_state)
+                //     }
+                //     EventCtx::Tag => {
+                //         app_state.event_context = EventCtx::List;
+                //         app_state.search.clear();
+                //     }
+                //     EventCtx::Confirm(_) => app_state.event_context = EventCtx::List,
+                //     EventCtx::List => app_state.mode = Mode::Quit,
+                // }
+            }
             Event::DbRequest(query) => match query {
                 DbQuery::Dips(_) => query_mgr.dips(&app_state),
                 DbQuery::Scopes(_) => query_mgr.scopes(&app_state),
@@ -811,7 +904,6 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
             Event::DbResponse(result) => match result {
                 DbResult::Dips(items) => {
                     app_state.data.dips = items.into_iter().map(|x| (x.id.to_owned(), x)).collect();
-                    app_state.ui.page = UiState::from_type(&PageType::Dips, &app_state);
                 }
                 DbResult::Tag | DbResult::Remove => {
                     query_mgr.dips(&app_state);
@@ -947,27 +1039,33 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                 PromptAction::Focus => {
                     // TODO: Move out to some function
                     app_state.ui.event_focus = EventFocusMode::Prompt;
-                    app_state.ui.prompt.reset();
-                    app_state.ui.prompt.mode = PromptMode::Input;
+                    app_state.ui.prompt.activate_input_state();
                 }
                 PromptAction::Defocus => {
                     app_state.ui.event_focus = EventFocusMode::Page;
-                    app_state.ui.prompt.mode = PromptMode::Help;
+                    app_state.ui.prompt.activate_help_state();
                 }
                 PromptAction::SearchInit => {
                     app_state.ui.event_focus = EventFocusMode::Prompt;
-                    app_state.ui.prompt.reset();
-                    app_state.ui.prompt.mode = PromptMode::Search;
+                    app_state.ui.prompt.activate_search_state();
                 }
                 PromptAction::Input(c) => {
-                    app_state.ui.prompt.input.push(c);
+                    if !app_state.ui.prompt.set_input(c) {
+                        app_state.ui.prompt.set_error("Can not type in this mode");
+                    }
                 }
                 PromptAction::InputBackspace => {
-                    app_state.ui.prompt.input.pop();
+                    app_state.ui.prompt.set_input_backspace();
+                }
+                PromptAction::Submit => {
+                    app_state.ui.prompt.set_submit();
                 }
             },
-            Event::Nav(page) => UiState::navigate(&page, &mut app_state),
-            Event::NavBack => UiState::navigate_back(&mut app_state),
+            Event::Nav(page) => app_state.ui.navigate(&page, &app_state.data),
+            Event::NavBack => match app_state.ui.back_page {
+                Some(ref page) => app_state.ui.navigate_back(&page.clone(), &app_state.data),
+                None => todo!(),
+            },
         }
     }
 
