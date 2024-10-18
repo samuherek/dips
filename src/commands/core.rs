@@ -230,6 +230,45 @@ impl PageState {
             _ => {}
         }
     }
+
+    fn fetch_data(&self, qm: &QueryManager) {
+        match self {
+            PageState::Dips { scope_id, .. } => {
+                let pool = qm.db_pool.clone();
+                let sender = qm.sender.clone();
+                let filter = DipsFilter::new().with_scope_id(scope_id.clone());
+                tokio::spawn(async move {
+                    let res = dip::get_filtered(&pool, filter)
+                        .await
+                        .expect("Failed to query filtered dips");
+                    if sender
+                        .send(Event::LoadData(DataPayload::Dips(res)))
+                        .is_err()
+                    {
+                        todo!("report an error about the dispatch");
+                    }
+                });
+            }
+            PageState::Scopes { .. } => {
+                let pool = qm.db_pool.clone();
+                let sender = qm.sender.clone();
+                let filter = ScopesFilter::new();
+                tokio::spawn(async move {
+                    let res = dir_context::get_filtered(&pool, filter)
+                        .await
+                        .expect("Failed to query filtered scopes");
+                    if sender
+                        .send(Event::LoadData(DataPayload::Scopes(res)))
+                        .is_err()
+                    {
+                        todo!("report an error about the dispatch");
+                    }
+                });
+            }
+            PageState::Splash => {}
+            PageState::Help => {}
+        };
+    }
 }
 
 impl Default for PageState {
@@ -264,57 +303,56 @@ impl Default for UiState {
 }
 
 impl UiState {
-    fn from_type(page: &PageType, data: &DataState) -> PageState {
+    fn from_type(page: &PageType) -> PageState {
         match page {
-            PageType::Dips { scope_id } => {
-                let items = data.dips.iter().map(|(id, _)| id.to_owned()).collect();
-                PageState::Dips {
-                    scope_id: *scope_id,
-                    index: 0,
-                    items,
-                    focus: DipsFocus::default(),
-                }
-            }
+            PageType::Dips { scope_id } => PageState::Dips {
+                scope_id: *scope_id,
+                index: 0,
+                items: vec![],
+                focus: DipsFocus::default(),
+            },
             PageType::Help => PageState::Help,
-            PageType::Scopes => {
-                let items = data.scopes.iter().map(|(id, _)| id.to_owned()).collect();
-                PageState::Scopes { index: 0, items }
+            PageType::Scopes => PageState::Scopes {
+                index: 0,
+                items: vec![],
+            },
+            PageType::Splash => {
+                unreachable!();
             }
-            PageType::Splash => todo!(),
         }
     }
 
-    fn navigate(&mut self, page: &PageType, data: &DataState) {
+    fn navigate(&mut self, page: &PageType) {
         self.back_page = Some(self.page.page_type());
         self.event_focus = EventFocusMode::Page;
-        self.page = UiState::from_type(page, data);
+        self.page = UiState::from_type(page);
         // TODO: this is the case only if it's help page for now.
         if page == &PageType::Help {
             self.prompt.activate_nav_state();
         }
     }
 
-    fn navigate_back(&mut self, page: &PageType, data: &DataState) {
-        self.page = UiState::from_type(page, data);
+    fn navigate_back(&mut self, page: &PageType) {
+        self.page = UiState::from_type(page);
         self.back_page = None;
         self.prompt.activate_help_state();
     }
 }
 
-fn dispatch_query_event(dispatch: &mpsc::UnboundedSender<Event>, page: &PageType) {
-    match page {
-        PageType::Dips { scope_id } => {
-            let _ = dispatch.send(Event::DbRequest(DbQuery::Dips(
-                DipsFilter::new().with_scope_id(*scope_id),
-            )));
-        }
-        PageType::Scopes => {
-            let _ = dispatch.send(Event::DbRequest(DbQuery::Scopes(ScopesFilter::new())));
-        }
-        PageType::Help => {}
-        PageType::Splash => {}
-    }
-}
+// fn dispatch_query_event(dispatch: &mpsc::UnboundedSender<Event>, page: &PageType) {
+//     match page {
+//         PageType::Dips { scope_id } => {
+//             let _ = dispatch.send(Event::DbRequest(DbQuery::Dips(
+//                 DipsFilter::new().with_scope_id(*scope_id),
+//             )));
+//         }
+//         PageType::Scopes => {
+//             let _ = dispatch.send(Event::DbRequest(DbQuery::Scopes(ScopesFilter::new())));
+//         }
+//         PageType::Help => {}
+//         PageType::Splash => {}
+//     }
+// }
 
 #[derive(Debug)]
 struct DataState {
@@ -354,16 +392,36 @@ impl AppState {
     fn is_running(&self) -> bool {
         self.mode == Mode::Running
     }
-}
 
-fn dips_page_items<'a>(
-    dips: &'a HashMap<uuid::Uuid, DipRowFull>,
-    search: &str,
-) -> Vec<&'a DipRowFull> {
-    dips.iter()
-        .map(|(_, val)| val)
-        .filter(|x| x.value.contains(search))
-        .collect::<Vec<_>>()
+    fn load_dips_page(&mut self, items: Vec<DipRowFull>) {
+        self.data.dips = items.into_iter().map(|x| (x.id.to_owned(), x)).collect();
+        match self.ui.page {
+            PageState::Dips {
+                ref mut items,
+                ref mut index,
+                ..
+            } => {
+                *items = self.data.dips.iter().map(|(id, _)| id.clone()).collect();
+                *index = 0;
+            }
+            _ => unreachable!(),
+        };
+    }
+
+    fn load_scopes_page(&mut self, items: Vec<DirContext>) {
+        self.data.scopes = items.into_iter().map(|x| (x.id.to_owned(), x)).collect();
+        match self.ui.page {
+            PageState::Scopes {
+                ref mut items,
+                ref mut index,
+                ..
+            } => {
+                *items = self.data.scopes.iter().map(|(id, _)| id.clone()).collect();
+                *index = 0;
+            }
+            _ => unreachable!(),
+        };
+    }
 }
 
 fn render_dips_page(
@@ -525,13 +583,6 @@ fn render_help_page(area: Rect, frame: &mut Frame) {
     frame.render_widget(text, area);
 }
 
-fn scopes_page_items(data: &HashMap<Uuid, DirContext>) -> Vec<&DirContext> {
-    data.iter()
-        .map(|(_, val)| val)
-        // .filter(|x| x.value.contains(search))
-        .collect::<Vec<_>>()
-}
-
 fn render_scopes_page(items: Vec<&DirContext>, index: usize, area: Rect, frame: &mut Frame) {
     let page_layout = Layout::new(
         Direction::Vertical,
@@ -578,8 +629,16 @@ fn render_page_with_prompt(state: &AppState, frame: &mut Frame) {
     );
     let [page, prompt] = layout.areas(frame.size());
     match &state.ui.page {
-        PageState::Dips { index, focus, .. } => {
-            let items = dips_page_items(&state.data.dips, state.ui.prompt.get_search_input());
+        PageState::Dips {
+            items,
+            index,
+            focus,
+            ..
+        } => {
+            let items = items
+                .iter()
+                .filter_map(|id| state.data.dips.get(id))
+                .collect::<Vec<_>>();
             let scope = &state.scope;
             render_dips_page(scope, items, *index, focus, page, frame);
         }
@@ -587,8 +646,11 @@ fn render_page_with_prompt(state: &AppState, frame: &mut Frame) {
             render_help_page(page, frame);
         }
         PageState::Splash => {}
-        PageState::Scopes { index, .. } => {
-            let items = scopes_page_items(&state.data.scopes);
+        PageState::Scopes { index, items, .. } => {
+            let items = items
+                .iter()
+                .filter_map(|id| state.data.scopes.get(id))
+                .collect::<Vec<_>>();
             render_scopes_page(items, *index, page, frame);
         }
     };
@@ -596,17 +658,9 @@ fn render_page_with_prompt(state: &AppState, frame: &mut Frame) {
 }
 
 #[derive(Debug)]
-enum DbQuery {
-    Dips(DipsFilter),
-    Scopes(ScopesFilter),
-}
-
-#[derive(Debug)]
-enum DbResult {
+enum DataPayload {
     Dips(Vec<DipRowFull>),
     Scopes(Vec<DirContext>),
-    Tag,
-    Remove,
 }
 
 #[derive(Debug)]
@@ -627,13 +681,12 @@ enum Action {
 
 #[derive(Debug)]
 enum Event {
-    DbRequest(DbQuery),
-    DbResponse(DbResult),
-    UiTick,
     Action(Action),
     Prompt(PromptAction),
     Nav(PageType),
     NavBack,
+    LoadData(DataPayload),
+    UiTick,
     QuitSignal,
 }
 
@@ -681,7 +734,6 @@ impl EventService {
                     DipsFocus::List => todo!(),
                     DipsFocus::Scope => Some(Event::Nav(PageType::Scopes)),
                 },
-                PageState::Splash => todo!(),
                 PageState::Scopes { items, index } => {
                     if let Some(id) = items.get(*index) {
                         Some(Event::Nav(PageType::Dips {
@@ -691,7 +743,8 @@ impl EventService {
                         todo!("Impl a prompt error message for unreachable.")
                     }
                 }
-                PageState::Help => todo!(),
+                PageState::Splash => None,
+                PageState::Help => None,
             },
             _ => None,
         }
@@ -761,18 +814,6 @@ impl QueryManager {
     fn new(db_pool: SqlitePool, sender: mpsc::UnboundedSender<Event>) -> Self {
         Self { db_pool, sender }
     }
-
-    fn dips(&self, filter: DipsFilter) {
-        let pool = self.db_pool.clone();
-        let sender = self.sender.clone();
-        tokio::spawn(async move {
-            let res = dip::get_filtered(&pool, filter)
-                .await
-                .expect("Failed to query filtered dips");
-            let _ = sender.send(Event::DbResponse(DbResult::Dips(res)));
-        });
-    }
-
     // fn tag_dip(&self, state: &AppState) {
     //     let item = state
     //         .list_selection_index
@@ -819,18 +860,6 @@ impl QueryManager {
     //         }
     //     }
     // }
-
-    fn scopes(&self) {
-        let pool = self.db_pool.clone();
-        let sender = self.sender.clone();
-        let filter = ScopesFilter::new();
-        tokio::spawn(async move {
-            let res = dir_context::get_filtered(&pool, filter)
-                .await
-                .expect("Failed to query filtered scopes");
-            let _ = sender.send(Event::DbResponse(DbResult::Scopes(res)));
-        });
-    }
 }
 
 pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> {
@@ -842,16 +871,9 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
     let scope = dir_context::get_closest(&config.db_pool, &config.context_dir)
         .await
         .expect("Failed to get dir context");
+    let query_mgr = QueryManager::new(config.db_pool, tx.clone());
     app_state.scope = scope;
 
-    let query_mgr = QueryManager::new(config.db_pool, tx.clone());
-
-    // TODO: create a bootstrap query and setup
-    events.send(Event::DbRequest(DbQuery::Dips(
-        DipsFilter::new()
-            .with_scope_id(app_state.scope.id())
-            .with_search(""),
-    )));
     events.send(Event::Nav(PageType::Dips {
         scope_id: app_state.scope.id(),
     }));
@@ -867,19 +889,13 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
 
         match events.next(&app_state).await? {
             Event::QuitSignal => app_state.mode = Mode::Quit,
-            Event::DbRequest(query) => match query {
-                DbQuery::Dips(filter) => query_mgr.dips(filter),
-                DbQuery::Scopes(_) => query_mgr.scopes(),
-            },
-            Event::DbResponse(result) => match result {
-                DbResult::Dips(items) => {
-                    app_state.data.dips = items.into_iter().map(|x| (x.id.to_owned(), x)).collect();
+            Event::LoadData(result) => match result {
+                DataPayload::Dips(items) => {
+                    app_state.load_dips_page(items);
                 }
-                DbResult::Scopes(items) => {
-                    app_state.data.scopes =
-                        items.into_iter().map(|x| (x.id.to_owned(), x)).collect();
+                DataPayload::Scopes(items) => {
+                    app_state.load_scopes_page(items);
                 }
-                DbResult::Tag | DbResult::Remove => {}
             },
             Event::UiTick => {}
             Event::Action(action) => match action {
@@ -913,11 +929,14 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                 }
             },
             Event::Nav(page) => {
-                dispatch_query_event(&events.dispatcher, &page);
-                app_state.ui.navigate(&page, &app_state.data);
+                app_state.ui.navigate(&page);
+                app_state.ui.page.fetch_data(&query_mgr);
             }
             Event::NavBack => match app_state.ui.back_page {
-                Some(ref page) => app_state.ui.navigate_back(&page.clone(), &app_state.data),
+                Some(ref page) => {
+                    app_state.ui.navigate_back(&page.clone());
+                    app_state.ui.page.fetch_data(&query_mgr);
+                }
                 None => todo!(),
             },
         }
