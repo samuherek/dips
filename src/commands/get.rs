@@ -22,11 +22,17 @@ pub async fn exec(app: &Application, all: bool) {
         let scope = dir_context::get_closest(&app.db_pool, &app.context_dir)
             .await
             .expect("Failed to query dir context");
-        let filter = dip::DipsFilter::new().with_scope_id(scope.id());
+        let filter = dip::DipsFilter::new().with_scope_id(scope.as_ref().map(|x| x.id.clone()));
         let items = dip::get_filtered(&app.db_pool, filter)
             .await
             .expect("Failed to read from database");
-        println!("Scope: {}", scope.label());
+        println!(
+            "Scope: {}",
+            scope
+                .as_ref()
+                .map(|x| x.dir_path.as_str())
+                .unwrap_or("Global")
+        );
         render_items(items);
     }
 }

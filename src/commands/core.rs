@@ -1,7 +1,6 @@
 use crate::configuration;
 use crate::models::dip::{self, DipRowFull, DipsFilter};
-use crate::models::dir_context::{self, ContextScope, DirContext, ScopesFilter};
-use crate::models::tag;
+use crate::models::dir_context::{self, DirContext, ScopesFilter};
 use crate::tui;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::{
@@ -44,7 +43,7 @@ enum SearchState {
 #[derive(Debug, Default)]
 enum PromptState {
     #[default]
-    Help,
+    Default,
     Nav,
     Input {
         input: String,
@@ -68,8 +67,8 @@ impl PromptState {
         }
     }
 
-    fn activate_help_state(&mut self) {
-        *self = Self::Help
+    fn activate_default_state(&mut self) {
+        *self = Self::Default
     }
 
     fn activate_search_state(&mut self) {
@@ -104,27 +103,41 @@ impl PromptState {
     }
 
     fn set_error(&mut self, value: &'static str) {
-        *self = Self::Message {
-            value,
-            style: PromptStyle::Danger,
-        }
+        self.handle_message(value, PromptStyle::Danger);
     }
 
-    fn handle_commit(&mut self) {
+    fn handle_commit(&mut self, dispatch: &mpsc::UnboundedSender<Event>) {
         match self {
             Self::Search { state, .. } => {
                 if let SearchState::Active = state {
                     *state = SearchState::Commit;
                 }
             }
-            Self::Input { .. } => {
-                // TODO: parse the command and match it to the commands and then execute.
-                self.set_error("Command not available");
+            Self::Input { ref input } => {
+                if let Some((cmd, rest)) = input.clone().split_once(" ") {
+                    match cmd {
+                        "add" => {
+                            if dispatch
+                                .send(Event::Command(Command::Add(rest.to_owned())))
+                                .is_err()
+                            {
+                                todo!("report error for dispatch");
+                            }
+                        }
+                        _ => self.set_error("Unknonw command"),
+                    }
+                } else {
+                    self.set_error("Invalid command pattern");
+                }
             }
             _ => {
                 self.set_error("Invalid submit state");
             }
         }
+    }
+
+    fn handle_message(&mut self, value: &'static str, style: PromptStyle) {
+        *self = Self::Message { value, style }
     }
 
     fn get_search_input(&self) -> &str {
@@ -270,6 +283,30 @@ impl PageState {
         };
     }
 }
+fn handle_add_command(state: &mut UiState, qm: &QueryManager, value: String) {
+    match state.page {
+        PageState::Dips { scope_id, .. } => {
+            let pool = qm.db_pool.clone();
+            let sender = qm.sender.clone();
+            let _ = sender.send(Event::Prompt(PromptEvent::Defocus));
+            tokio::spawn(async move {
+                let scope_id = scope_id.clone();
+                match dip::create(&pool, scope_id.clone(), &value, None).await {
+                    Ok(_) => sender.send(Event::Prompt(PromptEvent::Message {
+                        msg: "Failed to add the dip",
+                        style: PromptStyle::Danger,
+                    })),
+                    Err(_) => sender.send(Event::RefetchData(PageType::Dips { scope_id })),
+                }
+            });
+        }
+        _ => {
+            state
+                .prompt
+                .set_error("\"add\" command not supported fro this view");
+        }
+    }
+}
 
 impl Default for PageState {
     fn default() -> Self {
@@ -335,24 +372,9 @@ impl UiState {
     fn navigate_back(&mut self, page: &PageType) {
         self.page = UiState::from_type(page);
         self.back_page = None;
-        self.prompt.activate_help_state();
+        self.prompt.activate_default_state();
     }
 }
-
-// fn dispatch_query_event(dispatch: &mpsc::UnboundedSender<Event>, page: &PageType) {
-//     match page {
-//         PageType::Dips { scope_id } => {
-//             let _ = dispatch.send(Event::DbRequest(DbQuery::Dips(
-//                 DipsFilter::new().with_scope_id(*scope_id),
-//             )));
-//         }
-//         PageType::Scopes => {
-//             let _ = dispatch.send(Event::DbRequest(DbQuery::Scopes(ScopesFilter::new())));
-//         }
-//         PageType::Help => {}
-//         PageType::Splash => {}
-//     }
-// }
 
 #[derive(Debug)]
 struct DataState {
@@ -372,11 +394,8 @@ impl Default for DataState {
 #[derive(Debug)]
 struct AppState {
     mode: Mode,
-
     ui: UiState,
     data: DataState,
-
-    scope: ContextScope,
 }
 
 impl AppState {
@@ -385,7 +404,6 @@ impl AppState {
             mode: Mode::default(),
             ui: UiState::default(),
             data: DataState::default(),
-            scope: ContextScope::Global,
         }
     }
 
@@ -419,13 +437,13 @@ impl AppState {
                 *items = self.data.scopes.iter().map(|(id, _)| id.clone()).collect();
                 *index = 0;
             }
-            _ => unreachable!(),
+            _ => {}
         };
     }
 }
 
 fn render_dips_page(
-    scope: &ContextScope,
+    scope: Option<&DirContext>,
     items: Vec<&DipRowFull>,
     index: usize,
     focus: &DipsFocus,
@@ -441,7 +459,19 @@ fn render_dips_page(
         ],
     );
     let [header, border, main] = page_layout.areas(area);
-    let scope_text = format!("{}", scope.label());
+    let mut scope_text = vec![];
+    scope_text.push(Span::from(
+        scope.map(|x| x.dir_path.as_str()).unwrap_or("Global"),
+    ));
+
+    if let Some(scope) = scope {
+        scope_text.push(Span::raw(" "));
+        scope_text.push(Span::styled(
+            scope.git_remote.as_ref().map(|x| x.as_str()).unwrap_or(""),
+            Style::new().fg(SLATE.c500),
+        ));
+    }
+
     let scope_style = match focus {
         DipsFocus::Scope => Style::new().bg(SLATE.c800),
         DipsFocus::List => Style::new(),
@@ -484,7 +514,7 @@ fn render_dips_page(
 
 fn render_prompt(prompt: &PromptState, area: Rect, frame: &mut Frame) {
     match prompt {
-        PromptState::Help => {
+        PromptState::Default => {
             let layout = Layout::new(Direction::Horizontal, Constraint::from_fills([1, 1]));
             let [left, right] = layout.areas(area);
             let left_widget =
@@ -633,13 +663,13 @@ fn render_page_with_prompt(state: &AppState, frame: &mut Frame) {
             items,
             index,
             focus,
-            ..
+            scope_id,
         } => {
             let items = items
                 .iter()
                 .filter_map(|id| state.data.dips.get(id))
                 .collect::<Vec<_>>();
-            let scope = &state.scope;
+            let scope = scope_id.and_then(|id| state.data.scopes.get(&id));
             render_dips_page(scope, items, *index, focus, page, frame);
         }
         PageState::Help => {
@@ -664,13 +694,17 @@ enum DataPayload {
 }
 
 #[derive(Debug)]
-enum PromptAction {
+enum PromptEvent {
     Focus,
     Defocus,
     SearchInit,
     Input(char),
     InputBackspace,
     Commit,
+    Message {
+        msg: &'static str,
+        style: PromptStyle,
+    },
 }
 
 #[derive(Debug)]
@@ -680,12 +714,19 @@ enum Action {
 }
 
 #[derive(Debug)]
+enum Command {
+    Add(String),
+}
+
+#[derive(Debug)]
 enum Event {
     Action(Action),
-    Prompt(PromptAction),
+    Command(Command),
+    Prompt(PromptEvent),
     Nav(PageType),
     NavBack,
     LoadData(DataPayload),
+    RefetchData(PageType),
     UiTick,
     QuitSignal,
 }
@@ -727,22 +768,25 @@ impl EventService {
             KeyCode::Char('?') => Some(Event::Nav(PageType::Help)),
             KeyCode::Char('j') | KeyCode::Down => Some(Event::Action(Action::MoveDown)),
             KeyCode::Char('k') | KeyCode::Up => Some(Event::Action(Action::MoveUp)),
-            KeyCode::Char(':') => Some(Event::Prompt(PromptAction::Focus)),
-            KeyCode::Char('/') => Some(Event::Prompt(PromptAction::SearchInit)),
+            KeyCode::Char(':') => Some(Event::Prompt(PromptEvent::Focus)),
+            KeyCode::Char('/') => Some(Event::Prompt(PromptEvent::SearchInit)),
             KeyCode::Enter => match &ctx.ui.page {
                 PageState::Dips { focus, .. } => match focus {
-                    DipsFocus::List => todo!(),
+                    DipsFocus::List => Some(Event::Prompt(PromptEvent::Message {
+                        msg: "Enter is not implemented.",
+                        style: PromptStyle::Danger,
+                    })),
                     DipsFocus::Scope => Some(Event::Nav(PageType::Scopes)),
                 },
-                PageState::Scopes { items, index } => {
-                    if let Some(id) = items.get(*index) {
-                        Some(Event::Nav(PageType::Dips {
-                            scope_id: Some(id.to_owned()),
-                        }))
-                    } else {
-                        todo!("Impl a prompt error message for unreachable.")
-                    }
-                }
+                PageState::Scopes { items, index } => match items.get(*index) {
+                    Some(id) => Some(Event::Nav(PageType::Dips {
+                        scope_id: Some(id.to_owned()),
+                    })),
+                    None => Some(Event::Prompt(PromptEvent::Message {
+                        msg: "Could not determine the scope ID",
+                        style: PromptStyle::Danger,
+                    })),
+                },
                 PageState::Splash => None,
                 PageState::Help => None,
             },
@@ -752,10 +796,10 @@ impl EventService {
 
     fn handle_prompt_events(event: &KeyEvent, _ctx: &AppState) -> Option<Event> {
         match event.code {
-            KeyCode::Esc => Some(Event::Prompt(PromptAction::Defocus)),
-            KeyCode::Backspace => Some(Event::Prompt(PromptAction::InputBackspace)),
-            KeyCode::Char(c) => Some(Event::Prompt(PromptAction::Input(c))),
-            KeyCode::Enter => Some(Event::Prompt(PromptAction::Commit)),
+            KeyCode::Esc => Some(Event::Prompt(PromptEvent::Defocus)),
+            KeyCode::Backspace => Some(Event::Prompt(PromptEvent::InputBackspace)),
+            KeyCode::Char(c) => Some(Event::Prompt(PromptEvent::Input(c))),
+            KeyCode::Enter => Some(Event::Prompt(PromptEvent::Commit)),
             _ => None,
         }
     }
@@ -872,11 +916,13 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
         .await
         .expect("Failed to get dir context");
     let query_mgr = QueryManager::new(config.db_pool, tx.clone());
-    app_state.scope = scope;
 
     events.send(Event::Nav(PageType::Dips {
-        scope_id: app_state.scope.id(),
+        scope_id: scope.as_ref().map(|x| x.id.clone()),
     }));
+    if let Some(scope) = scope {
+        events.send(Event::LoadData(DataPayload::Scopes(vec![scope])))
+    }
 
     while app_state.is_running() {
         terminal
@@ -897,36 +943,43 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                     app_state.load_scopes_page(items);
                 }
             },
+            Event::RefetchData(_) => app_state.ui.page.fetch_data(&query_mgr),
             Event::UiTick => {}
             Event::Action(action) => match action {
                 Action::MoveUp => app_state.ui.page.action_move_up(),
                 Action::MoveDown => app_state.ui.page.action_move_down(),
             },
             Event::Prompt(action) => match action {
-                PromptAction::Focus => {
+                PromptEvent::Focus => {
                     // TODO: Move out to some function
                     app_state.ui.event_focus = EventFocusMode::Prompt;
                     app_state.ui.prompt.activate_input_state();
                 }
-                PromptAction::Defocus => {
+                PromptEvent::Defocus => {
                     app_state.ui.event_focus = EventFocusMode::Page;
-                    app_state.ui.prompt.activate_help_state();
+                    app_state.ui.prompt.activate_default_state();
                 }
-                PromptAction::SearchInit => {
+                PromptEvent::SearchInit => {
                     app_state.ui.event_focus = EventFocusMode::Prompt;
                     app_state.ui.prompt.activate_search_state();
                 }
-                PromptAction::Input(c) => {
+                PromptEvent::Input(c) => {
                     if !app_state.ui.prompt.set_input(c) {
                         app_state.ui.prompt.set_error("Can not type in this mode");
                     }
                 }
-                PromptAction::InputBackspace => {
+                PromptEvent::InputBackspace => {
                     app_state.ui.prompt.set_input_backspace();
                 }
-                PromptAction::Commit => {
-                    app_state.ui.prompt.handle_commit();
+                PromptEvent::Commit => {
+                    app_state.ui.prompt.handle_commit(&events.dispatcher);
                 }
+                PromptEvent::Message { msg, style } => {
+                    app_state.ui.prompt.handle_message(msg, style);
+                }
+            },
+            Event::Command(cmd) => match cmd {
+                Command::Add(value) => handle_add_command(&mut app_state.ui, &query_mgr, value),
             },
             Event::Nav(page) => {
                 app_state.ui.navigate(&page);

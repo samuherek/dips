@@ -262,10 +262,10 @@ pub async fn db_find_or_create(
 pub async fn get_closest(
     conn: &SqlitePool,
     ctx: &RuntimeDirContext,
-) -> Result<ContextScope, sqlx::Error> {
+) -> Result<Option<DirContext>, sqlx::Error> {
     let git_remote = ctx.git_remote();
     let path = ctx.path();
-    let res = sqlx::query_as(
+    sqlx::query_as(
         r"
             select * from dir_contexts 
             where git_remote = $1
@@ -277,6 +277,5 @@ pub async fn get_closest(
     .bind(git_remote)
     .bind(path)
     .fetch_optional(conn)
-    .await?;
-    Ok(ContextScope::from(res))
+    .await
 }

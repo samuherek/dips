@@ -163,6 +163,33 @@ pub async fn get_all(conn: &SqlitePool) -> Result<Vec<DipRowFull>, sqlx::Error> 
 }
 
 pub async fn create(
+    pool: &SqlitePool,
+    dir_context_id: Option<Uuid>,
+    value: &str,
+    note: Option<&str>,
+) -> Result<Dip, sqlx::Error> {
+    let item = Dip::new(dir_context_id, value, note);
+    // TODO: make the UUID into a string otherwise it stores as garbage.
+    let id = item.id.to_string();
+    let dir_context_id = item.dir_context_id.map(|x| x.to_string());
+    let _ = sqlx::query!(
+        r#"
+        insert into dips(id, value, note, created_at, updated_at, dir_context_id)
+        values($1, $2, $3, $4, $4, $5)
+        "#,
+        id,
+        item.value,
+        item.note,
+        item.created_at,
+        dir_context_id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(item)
+}
+
+pub async fn create_with_transaction(
     tx: &mut Transaction<'_, Sqlite>,
     dir_context_id: Option<Uuid>,
     value: &str,

@@ -45,7 +45,7 @@ async fn add_global(app: &Application, value: &str, _tag: Option<&str>) {
         .await
         .expect("Failed to start transaction in sqlite");
 
-    dip::create(&mut tx, None, &value, None)
+    dip::create_with_transaction(&mut tx, None, &value, None)
         .await
         .expect("Failed to create a dip");
 
@@ -63,7 +63,7 @@ async fn add_contextual(app: &Application, value: &str, tag: Option<&str>) {
         .await
         .expect("Failed to get the current dir context");
 
-    let item = dip::create(&mut tx, Some(current_dir_context.id), &value, None)
+    let item = dip::create_with_transaction(&mut tx, Some(current_dir_context.id), &value, None)
         .await
         .expect("Failed to create a dip");
 
