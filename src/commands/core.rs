@@ -9,7 +9,7 @@ use crossterm::event::{
 };
 use futures_util::stream::StreamExt;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::palette::tailwind::{GRAY, SLATE};
+use ratatui::style::palette::tailwind::{GRAY, RED, SLATE};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, HighlightSpacing, List, ListItem, ListState, Paragraph};
@@ -110,12 +110,16 @@ impl PromptState {
         }
     }
 
-    fn set_submit(&mut self) {
+    fn handle_commit(&mut self) {
         match self {
             Self::Search { state, .. } => {
                 if let SearchState::Active = state {
                     *state = SearchState::Commit;
                 }
+            }
+            Self::Input { .. } => {
+                // TODO: parse the command and match it to the commands and then execute.
+                self.set_error("Command not available");
             }
             _ => {
                 self.set_error("Invalid submit state");
@@ -134,7 +138,7 @@ impl PromptState {
 
 #[derive(Debug, Clone, PartialEq)]
 enum PageType {
-    Dips { scope_id: Uuid },
+    Dips { scope_id: Option<Uuid> },
     Scope,
     Help,
     Splash,
@@ -157,7 +161,7 @@ impl PageType {
 enum PageState {
     Splash,
     Dips {
-        scope_id: Uuid,
+        scope_id: Option<Uuid>,
         index: usize,
         items: Vec<Uuid>,
     },
@@ -433,8 +437,29 @@ fn render_prompt(prompt: &PromptState, area: Rect, frame: &mut Frame) {
         PromptState::Confirm => {
             todo!()
         }
-        PromptState::Message { .. } => {
-            todo!()
+        PromptState::Message { value, style } => {
+            let style = match style {
+                PromptStyle::Danger => Style::new().fg(RED.c500),
+                _ => {
+                    todo!()
+                }
+            };
+            let layout = Layout::new(Direction::Horizontal, Constraint::from_fills([1, 1]));
+            let [left, right] = layout.areas(area);
+            let left_widget = Line::from(format!("Error: {}", value)).style(style);
+            let right_widget = Line::from(vec![
+                Span::raw("   Search "),
+                Span::styled(" / ", Style::new().bg(SLATE.c800).fg(GRAY.c400)),
+                Span::raw("   Help "),
+                Span::styled(" ? ", Style::new().bg(SLATE.c800).fg(GRAY.c400)),
+                Span::raw("   Exit "),
+                Span::styled(" C-c ", Style::new().bg(SLATE.c800).fg(GRAY.c400)),
+            ])
+            .style(Style::new().fg(GRAY.c200))
+            .alignment(Alignment::Right);
+
+            frame.render_widget(left_widget, left);
+            frame.render_widget(right_widget, right);
         }
     };
 }
@@ -487,7 +512,7 @@ enum PromptAction {
     SearchInit,
     Input(char),
     InputBackspace,
-    Submit,
+    Commit,
 }
 
 #[derive(Debug)]
@@ -556,7 +581,7 @@ impl EventService {
             KeyCode::Esc => Some(Event::Prompt(PromptAction::Defocus)),
             KeyCode::Backspace => Some(Event::Prompt(PromptAction::InputBackspace)),
             KeyCode::Char(c) => Some(Event::Prompt(PromptAction::Input(c))),
-            KeyCode::Enter => Some(Event::Prompt(PromptAction::Submit)),
+            KeyCode::Enter => Some(Event::Prompt(PromptAction::Commit)),
             _ => None,
         }
     }
@@ -708,9 +733,9 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
             .with_scope_id(app_state.scope.id())
             .with_search(""),
     )));
-    // events.send(Event::Nav(PageType::Dips {
-    //     scope_id: scope.id().expect("Have initial scope!!!"),
-    // }));
+    events.send(Event::Nav(PageType::Dips {
+        scope_id: app_state.scope.id(),
+    }));
 
     while app_state.is_running() {
         terminal
@@ -766,8 +791,8 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                 PromptAction::InputBackspace => {
                     app_state.ui.prompt.set_input_backspace();
                 }
-                PromptAction::Submit => {
-                    app_state.ui.prompt.set_submit();
+                PromptAction::Commit => {
+                    app_state.ui.prompt.handle_commit();
                 }
             },
             Event::Nav(page) => app_state.ui.navigate(&page, &app_state.data),

@@ -63,7 +63,7 @@ async fn add_contextual(app: &Application, value: &str, tag: Option<&str>) {
         .await
         .expect("Failed to get the current dir context");
 
-    let item = dip::create(&mut tx, Some(current_dir_context.id.as_ref()), &value, None)
+    let item = dip::create(&mut tx, Some(current_dir_context.id), &value, None)
         .await
         .expect("Failed to create a dip");
 

@@ -1,4 +1,5 @@
 use crate::git;
+use sqlx::types::Uuid;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -35,7 +36,7 @@ impl ContextScope {
         }
     }
 
-    pub fn id(&self) -> Option<String> {
+    pub fn id(&self) -> Option<Uuid> {
         match self {
             Self::Dir(dir) => Some(dir.id.to_owned()),
             Self::Global => None,
@@ -60,7 +61,8 @@ impl From<Option<DirContext>> for ContextScope {
 
 #[derive(serde::Deserialize, sqlx::FromRow, Debug, Clone)]
 pub struct DirContext {
-    pub id: String,
+    #[sqlx(try_from = "uuid::fmt::Hyphenated")]
+    pub id: Uuid,
     pub git_remote: Option<String>,
     pub git_dir_name: Option<String>,
     pub dir_path: String,
@@ -71,7 +73,7 @@ pub struct DirContext {
 impl DirContext {
     fn new(dir_path: &str, git_dir_name: Option<String>, git_remote: Option<String>) -> Self {
         let now: chrono::NaiveDateTime = chrono::Utc::now().date_naive().into();
-        let id: String = uuid::Uuid::new_v4().into();
+        let id = Uuid::new_v4();
         Self {
             id,
             dir_path: dir_path.into(),
@@ -197,13 +199,12 @@ pub async fn db_find_one(
     git_dir_name: Option<&str>,
     git_remote: Option<&str>,
 ) -> Option<DirContext> {
-    match sqlx::query_as!(
-        DirContext,
+    match sqlx::query_as(
         "SELECT * FROM dir_contexts WHERE dir_path = $1 OR git_remote = $2 OR git_dir_name = $3",
-        current_path,
-        git_dir_name,
-        git_remote
     )
+    .bind(current_path)
+    .bind(git_dir_name)
+    .bind(git_remote)
     .fetch_optional(conn)
     .await
     {
@@ -222,6 +223,8 @@ pub async fn db_create(
     git_remote: Option<String>,
 ) -> Result<DirContext, sqlx::Error> {
     let dir_context = DirContext::new(dir_path, git_dir_name, git_remote);
+    // TODO: make the UUID into a string otherwise it stores as garbage.
+    let id = dir_context.id.to_string();
     sqlx::query!(
         r#"
         insert into dir_contexts(
@@ -229,7 +232,7 @@ pub async fn db_create(
         ) values (
             $1, $2, $3, $4, $5, $6
         )"#,
-        dir_context.id,
+        id,
         dir_context.dir_path,
         dir_context.git_remote,
         dir_context.git_dir_name,
@@ -248,13 +251,12 @@ pub async fn db_find_or_create(
     git_dir_name: Option<String>,
     git_remote: Option<String>,
 ) -> Result<DirContext, sqlx::Error> {
-    if let Some(res) = sqlx::query_as!(
-        DirContext,
+    if let Some(res) = sqlx::query_as(
         "SELECT * FROM dir_contexts WHERE dir_path = $1 OR git_remote = $2 OR git_dir_name = $3",
-        current_path,
-        git_dir_name,
-        git_remote
     )
+    .bind(current_path)
+    .bind(&git_dir_name)
+    .bind(&git_remote)
     .fetch_optional(&mut **tx)
     .await?
     {
@@ -270,8 +272,7 @@ pub async fn get_closest(
 ) -> Result<ContextScope, sqlx::Error> {
     let git_remote = ctx.git_remote();
     let path = ctx.path();
-    let res = sqlx::query_as!(
-        DirContext,
+    let res = sqlx::query_as(
         r"
             select * from dir_contexts 
             where git_remote = $1
@@ -279,9 +280,9 @@ pub async fn get_closest(
             order by length(dir_path) desc
             limit 1
         ",
-        git_remote,
-        path
     )
+    .bind(git_remote)
+    .bind(path)
     .fetch_optional(conn)
     .await?;
     Ok(ContextScope::from(res))

@@ -5,7 +5,7 @@ use std::ops::Deref;
 
 #[derive(Debug)]
 pub struct DipsFilter {
-    scope_id: Option<String>,
+    scope_id: Option<Uuid>,
     search: Option<String>,
 }
 
@@ -17,7 +17,7 @@ impl DipsFilter {
         }
     }
 
-    pub fn with_scope_id(self, id: Option<String>) -> Self {
+    pub fn with_scope_id(self, id: Option<Uuid>) -> Self {
         Self {
             scope_id: id,
             ..self
@@ -37,13 +37,13 @@ pub struct Dip {
     pub id: Uuid,
     pub value: String,
     pub note: Option<String>,
-    pub dir_context_id: Option<String>,
+    pub dir_context_id: Option<Uuid>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
 }
 
 impl Dip {
-    pub fn new(context_id: Option<&str>, value: &str, note: Option<&str>) -> Self {
+    pub fn new(context_id: Option<Uuid>, value: &str, note: Option<&str>) -> Self {
         let id = uuid::Uuid::new_v4();
         let now = chrono::Utc::now().date_naive().into();
         let note = note.map(|v| v.to_string());
@@ -51,7 +51,7 @@ impl Dip {
             id,
             value: value.into(),
             note,
-            dir_context_id: context_id.map(|x| x.to_string()),
+            dir_context_id: context_id,
             created_at: now,
             updated_at: now,
         }
@@ -137,7 +137,7 @@ pub async fn get_filtered(
         GROUP BY dips.id
         ",
     )
-    .bind(filter.scope_id)
+    .bind(filter.scope_id.map(|x| x.to_string()))
     .bind(search)
     .fetch_all(conn)
     .await
@@ -164,21 +164,24 @@ pub async fn get_all(conn: &SqlitePool) -> Result<Vec<DipRowFull>, sqlx::Error> 
 
 pub async fn create(
     tx: &mut Transaction<'_, Sqlite>,
-    dir_context_id: Option<&str>,
+    dir_context_id: Option<Uuid>,
     value: &str,
     note: Option<&str>,
 ) -> Result<Dip, sqlx::Error> {
     let item = Dip::new(dir_context_id, value, note);
+    // TODO: make the UUID into a string otherwise it stores as garbage.
+    let id = item.id.to_string();
+    let dir_context_id = item.dir_context_id.map(|x| x.to_string());
     let _ = sqlx::query!(
         r#"
         insert into dips(id, value, note, created_at, updated_at, dir_context_id)
         values($1, $2, $3, $4, $4, $5)
         "#,
-        item.id,
+        id,
         item.value,
         item.note,
         item.created_at,
-        item.dir_context_id
+        dir_context_id
     )
     .execute(&mut **tx)
     .await?;

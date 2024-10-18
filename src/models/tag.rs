@@ -59,6 +59,7 @@ pub async fn create_dip_tag(
     value: &str,
 ) -> Result<(), sqlx::Error> {
     let tag_id = get_or_create(tx, value).await?;
+    // TODO: make the UUID into a string otherwise it stores as garbage.
     sqlx::query!(
         "insert into dips_tags (dip_id, tag_id) values($1, $2)",
         dip_id,
