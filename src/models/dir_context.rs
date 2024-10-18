@@ -88,9 +88,9 @@ impl DirContext {
 pub async fn get_filtered(
     conn: &SqlitePool,
     filter: ScopesFilter,
-) -> Result<Vec<ContextScope>, sqlx::Error> {
+) -> Result<Vec<DirContext>, sqlx::Error> {
     let search = format!("%{}%", filter.search.unwrap_or_default()).to_lowercase();
-    let res: Vec<DirContext> = sqlx::query_as(
+    sqlx::query_as(
         r#"
         select * from dir_contexts
         where lower(dir_path) like $1
@@ -99,14 +99,7 @@ pub async fn get_filtered(
     )
     .bind(&search)
     .fetch_all(conn)
-    .await?;
-    let add_global = "global".contains(&search) || search == "%%";
-    let items = add_global
-        .then(|| ContextScope::Global)
-        .into_iter()
-        .chain(res.into_iter().map(ContextScope::from))
-        .collect();
-    Ok(items)
+    .await
 }
 
 pub async fn get_or_create_current(
