@@ -177,6 +177,13 @@ enum DipsFocus {
     Scope,
 }
 
+#[derive(Debug, Default)]
+enum ScopesFocus {
+    #[default]
+    Global,
+    List,
+}
+
 #[derive(Debug)]
 enum PageState {
     Splash,
@@ -189,6 +196,7 @@ enum PageState {
     Scopes {
         index: usize,
         items: Vec<Uuid>,
+        focus: ScopesFocus,
     },
     Help,
 }
@@ -218,6 +226,19 @@ impl PageState {
                     }
                 }
             }
+            Self::Scopes {
+                index,
+                items,
+                focus,
+            } => {
+                if matches!(focus, ScopesFocus::List) {
+                    if !items.is_empty() && *index > 0 {
+                        *index = index.saturating_sub(1);
+                    } else {
+                        *focus = ScopesFocus::Global;
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -237,6 +258,21 @@ impl PageState {
                 }
                 DipsFocus::Scope => {
                     *focus = DipsFocus::List;
+                    *index = 0;
+                }
+            },
+            Self::Scopes {
+                index,
+                items,
+                focus,
+            } => match focus {
+                ScopesFocus::List => {
+                    if !items.is_empty() {
+                        *index = index.saturating_add(1).min(items.len() - 1);
+                    }
+                }
+                ScopesFocus::Global => {
+                    *focus = ScopesFocus::List;
                     *index = 0;
                 }
             },
@@ -352,6 +388,7 @@ impl UiState {
             PageType::Scopes => PageState::Scopes {
                 index: 0,
                 items: vec![],
+                focus: ScopesFocus::default(),
             },
             PageType::Splash => {
                 unreachable!();
@@ -613,7 +650,13 @@ fn render_help_page(area: Rect, frame: &mut Frame) {
     frame.render_widget(text, area);
 }
 
-fn render_scopes_page(items: Vec<&DirContext>, index: usize, area: Rect, frame: &mut Frame) {
+fn render_scopes_page(
+    items: Vec<&DirContext>,
+    index: usize,
+    focus: &ScopesFocus,
+    area: Rect,
+    frame: &mut Frame,
+) {
     let page_layout = Layout::new(
         Direction::Vertical,
         [
@@ -628,8 +671,24 @@ fn render_scopes_page(items: Vec<&DirContext>, index: usize, area: Rect, frame: 
         Paragraph::new(Span::styled("-------", Style::new().fg(GRAY.c500))),
         border,
     );
+    let index = if items.len() > 0 && matches!(focus, ScopesFocus::List) {
+        Some(index)
+    } else {
+        None
+    };
+    let main_layout = Layout::new(
+        Direction::Vertical,
+        [Constraint::Length(1), Constraint::Min(0)],
+    );
+    let [global_line, list_area] = main_layout.areas(main);
 
-    let index = if items.len() > 0 { Some(index) } else { None };
+    let global_item = Paragraph::new(Line::from("Global"));
+    let global_item_styles = match focus {
+        ScopesFocus::List => Style::new(),
+        ScopesFocus::Global => Style::new().bg(SLATE.c800),
+    };
+
+    frame.render_widget(global_item.style(global_item_styles), global_line);
 
     let items = items
         .iter()
@@ -649,7 +708,7 @@ fn render_scopes_page(items: Vec<&DirContext>, index: usize, area: Rect, frame: 
         .highlight_spacing(HighlightSpacing::Never);
 
     let mut state = ListState::default().with_selected(index);
-    frame.render_stateful_widget(list, main, &mut state);
+    frame.render_stateful_widget(list, list_area, &mut state);
 }
 
 fn render_page_with_prompt(state: &AppState, frame: &mut Frame) {
@@ -676,12 +735,16 @@ fn render_page_with_prompt(state: &AppState, frame: &mut Frame) {
             render_help_page(page, frame);
         }
         PageState::Splash => {}
-        PageState::Scopes { index, items, .. } => {
+        PageState::Scopes {
+            index,
+            items,
+            focus,
+        } => {
             let items = items
                 .iter()
                 .filter_map(|id| state.data.scopes.get(id))
                 .collect::<Vec<_>>();
-            render_scopes_page(items, *index, page, frame);
+            render_scopes_page(items, *index, focus, page, frame);
         }
     };
     render_prompt(&state.ui.prompt, prompt, frame);
@@ -778,14 +841,23 @@ impl EventService {
                     })),
                     DipsFocus::Scope => Some(Event::Nav(PageType::Scopes)),
                 },
-                PageState::Scopes { items, index } => match items.get(*index) {
-                    Some(id) => Some(Event::Nav(PageType::Dips {
-                        scope_id: Some(id.to_owned()),
-                    })),
-                    None => Some(Event::Prompt(PromptEvent::Message {
-                        msg: "Could not determine the scope ID",
-                        style: PromptStyle::Danger,
-                    })),
+                PageState::Scopes {
+                    items,
+                    index,
+                    focus,
+                } => match focus {
+                    ScopesFocus::Global => {
+                        Some(Event::Nav(PageType::Dips{scope_id: None}))
+                    }
+                    ScopesFocus::List => match items.get(*index) {
+                        Some(id) => Some(Event::Nav(PageType::Dips {
+                            scope_id: Some(id.to_owned()),
+                        })),
+                        None => Some(Event::Prompt(PromptEvent::Message {
+                            msg: "Could not determine the scope ID",
+                            style: PromptStyle::Danger,
+                        })),
+                    },
                 },
                 PageState::Splash => None,
                 PageState::Help => None,
