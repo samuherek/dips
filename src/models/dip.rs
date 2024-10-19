@@ -216,7 +216,8 @@ pub async fn create_with_transaction(
     Ok(item)
 }
 
-pub async fn delete(conn: &SqlitePool, id: &String) -> Result<(), sqlx::Error> {
+pub async fn delete(conn: &SqlitePool, id: &Uuid) -> Result<(), sqlx::Error> {
+    let id = id.to_string();
     let _ = sqlx::query!("DELETE from dips where id = $1", id)
         .execute(conn)
         .await?;

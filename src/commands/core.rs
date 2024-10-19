@@ -57,7 +57,10 @@ enum PromptState {
         value: &'static str,
         style: PromptStyle,
     },
-    Confirm,
+    Confirm {
+        input: String,
+        command: Command,
+    },
 }
 
 impl PromptState {
@@ -83,9 +86,18 @@ impl PromptState {
         *self = Self::Nav;
     }
 
+    fn activate_confirm_state(&mut self, command: Command) {
+        *self = Self::Confirm {
+            input: Default::default(),
+            command,
+        }
+    }
+
     fn set_input(&mut self, c: char) -> bool {
         match self {
-            Self::Search { input, .. } | Self::Input { input, .. } => {
+            Self::Search { input, .. }
+            | Self::Input { input, .. }
+            | Self::Confirm { input, .. } => {
                 input.push(c);
                 true
             }
@@ -95,7 +107,9 @@ impl PromptState {
 
     fn set_input_backspace(&mut self) {
         match self {
-            Self::Search { input, .. } | Self::Input { input, .. } => {
+            Self::Search { input, .. }
+            | Self::Input { input, .. }
+            | Self::Confirm { input, .. } => {
                 input.pop();
             }
             _ => {}
@@ -117,12 +131,7 @@ impl PromptState {
                 if let Some((cmd, rest)) = input.clone().split_once(" ") {
                     match cmd {
                         "add" => {
-                            if dispatch
-                                .send(Event::Command(Command::Add(rest.to_owned())))
-                                .is_err()
-                            {
-                                todo!("report error for dispatch");
-                            }
+                            let _ = dispatch.send(Event::Command(Command::Add(rest.to_owned())));
                         }
                         _ => self.set_error("Unknonw command"),
                     }
@@ -130,6 +139,16 @@ impl PromptState {
                     self.set_error("Invalid command pattern");
                 }
             }
+            Self::Confirm { input, command } => match command {
+                Command::DeleteDip(id) => {
+                    if input == "y" {
+                        let _ = dispatch.send(Event::Command(Command::DeleteDip(*id)));
+                    } else {
+                        self.set_error("Only y is allowed");
+                    }
+                }
+                _ => todo!(),
+            },
             _ => {
                 self.set_error("Invalid submit state");
             }
@@ -328,11 +347,11 @@ fn handle_add_command(state: &mut UiState, qm: &QueryManager, value: String) {
             tokio::spawn(async move {
                 let scope_id = scope_id.clone();
                 match dip::create(&pool, scope_id.clone(), &value, None).await {
-                    Ok(_) => sender.send(Event::Prompt(PromptEvent::Message {
+                    Ok(_) => sender.send(Event::RefetchData(PageType::Dips { scope_id })),
+                    Err(_) => sender.send(Event::Prompt(PromptEvent::Message {
                         msg: "Failed to add the dip",
                         style: PromptStyle::Danger,
                     })),
-                    Err(_) => sender.send(Event::RefetchData(PageType::Dips { scope_id })),
                 }
             });
         }
@@ -342,6 +361,33 @@ fn handle_add_command(state: &mut UiState, qm: &QueryManager, value: String) {
                 .set_error("\"add\" command not supported fro this view");
         }
     }
+}
+
+fn handle_delete_dip_command(state: &mut UiState, qm: &QueryManager, id: Uuid) {
+    let pool = qm.db_pool.clone();
+    let sender = qm.sender.clone();
+    let scope_id = match state.page {
+        PageState::Dips { scope_id, .. } => scope_id.clone(),
+        _ => None,
+    };
+    let _ = sender.send(Event::Prompt(PromptEvent::Defocus));
+    tokio::spawn(async move {
+        match dip::delete(&pool, &id).await {
+            Ok(_) => {
+                let _ = sender.send(Event::Prompt(PromptEvent::Message {
+                    msg: "Dip deleted",
+                    style: PromptStyle::Info,
+                }));
+                let _ = sender.send(Event::RefetchData(PageType::Dips { scope_id }));
+            }
+            Err(_) => {
+                let _ = sender.send(Event::Prompt(PromptEvent::Message {
+                    msg: "Failed to delte the dip",
+                    style: PromptStyle::Danger,
+                }));
+            }
+        }
+    });
 }
 
 impl Default for PageState {
@@ -613,19 +659,44 @@ fn render_prompt(prompt: &PromptState, area: Rect, frame: &mut Frame) {
             frame.render_widget(left_widget, left);
             frame.render_widget(right_widget, right);
         }
-        PromptState::Confirm => {
-            todo!()
-        }
+        PromptState::Confirm { input, command } => match command {
+            Command::DeleteDip(_) => {
+                let layout = Layout::new(
+                    Direction::Horizontal,
+                    [Constraint::Min(0), Constraint::Length(20)],
+                );
+                let [left, right] = layout.areas(area);
+                let left_widget = Line::from(vec![
+                    Span::raw("DELETE: "),
+                    Span::raw("Are you sure? (y) "),
+                    Span::from(input),
+                ])
+                .style(Style::new().bg(SLATE.c800));
+                let right_widget = Line::from(vec![
+                    Span::styled("To cancel ", Style::new().fg(GRAY.c500)),
+                    Span::styled(" Esc ", Style::new().bg(SLATE.c600).fg(GRAY.c400)),
+                ])
+                .style(Style::new().fg(GRAY.c600).bg(SLATE.c800))
+                .alignment(Alignment::Right);
+                frame.render_widget(left_widget, left);
+                frame.render_widget(right_widget, right);
+            }
+            _ => todo!(),
+        },
         PromptState::Message { value, style } => {
-            let style = match style {
+            let type_style = match style {
                 PromptStyle::Danger => Style::new().fg(RED.c500),
-                _ => {
-                    todo!()
-                }
+                PromptStyle::Info => Style::default(),
+                _ => todo!()
+            };
+            let tag = match style {
+                PromptStyle::Danger => "Error",
+                PromptStyle::Info => "Info",
+                _ => todo!()
             };
             let layout = Layout::new(Direction::Horizontal, Constraint::from_fills([1, 1]));
             let [left, right] = layout.areas(area);
-            let left_widget = Line::from(format!("Error: {}", value)).style(style);
+            let left_widget = Line::from(format!("{}: {}", tag, value)).style(type_style);
             let right_widget = Line::from(vec![
                 Span::raw("   Search "),
                 Span::styled(" / ", Style::new().bg(SLATE.c800).fg(GRAY.c400)),
@@ -757,10 +828,16 @@ enum DataPayload {
 }
 
 #[derive(Debug)]
+enum SearchMode {
+    Init,
+}
+
+#[derive(Debug)]
 enum PromptEvent {
     Focus,
     Defocus,
-    SearchInit,
+    Search(SearchMode),
+    Confirm(Command),
     Input(char),
     InputBackspace,
     Commit,
@@ -779,6 +856,7 @@ enum Action {
 #[derive(Debug)]
 enum Command {
     Add(String),
+    DeleteDip(Uuid),
 }
 
 #[derive(Debug)]
@@ -832,7 +910,26 @@ impl EventService {
             KeyCode::Char('j') | KeyCode::Down => Some(Event::Action(Action::MoveDown)),
             KeyCode::Char('k') | KeyCode::Up => Some(Event::Action(Action::MoveUp)),
             KeyCode::Char(':') => Some(Event::Prompt(PromptEvent::Focus)),
-            KeyCode::Char('/') => Some(Event::Prompt(PromptEvent::SearchInit)),
+            KeyCode::Char('/') => Some(Event::Prompt(PromptEvent::Search(SearchMode::Init))),
+            KeyCode::Char('d') => match &ctx.ui.page {
+                PageState::Splash => None,
+                PageState::Dips {
+                    focus,
+                    index,
+                    items,
+                    ..
+                } => match focus {
+                    DipsFocus::Scope => None,
+                    DipsFocus::List => match items.get(*index) {
+                        Some(id) => Some(Event::Prompt(PromptEvent::Confirm(Command::DeleteDip(
+                            id.clone(),
+                        )))),
+                        None => None,
+                    },
+                },
+                PageState::Scopes { .. } => None,
+                PageState::Help => None,
+            },
             KeyCode::Enter => match &ctx.ui.page {
                 PageState::Dips { focus, .. } => match focus {
                     DipsFocus::List => Some(Event::Prompt(PromptEvent::Message {
@@ -846,9 +943,7 @@ impl EventService {
                     index,
                     focus,
                 } => match focus {
-                    ScopesFocus::Global => {
-                        Some(Event::Nav(PageType::Dips{scope_id: None}))
-                    }
+                    ScopesFocus::Global => Some(Event::Nav(PageType::Dips { scope_id: None })),
                     ScopesFocus::List => match items.get(*index) {
                         Some(id) => Some(Event::Nav(PageType::Dips {
                             scope_id: Some(id.to_owned()),
@@ -1031,7 +1126,7 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                     app_state.ui.event_focus = EventFocusMode::Page;
                     app_state.ui.prompt.activate_default_state();
                 }
-                PromptEvent::SearchInit => {
+                PromptEvent::Search(_) => {
                     app_state.ui.event_focus = EventFocusMode::Prompt;
                     app_state.ui.prompt.activate_search_state();
                 }
@@ -1039,6 +1134,10 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
                     if !app_state.ui.prompt.set_input(c) {
                         app_state.ui.prompt.set_error("Can not type in this mode");
                     }
+                }
+                PromptEvent::Confirm(cmd) => {
+                    app_state.ui.event_focus = EventFocusMode::Prompt;
+                    app_state.ui.prompt.activate_confirm_state(cmd);
                 }
                 PromptEvent::InputBackspace => {
                     app_state.ui.prompt.set_input_backspace();
@@ -1052,6 +1151,9 @@ pub async fn exec(config: configuration::Application) -> color_eyre::Result<()> 
             },
             Event::Command(cmd) => match cmd {
                 Command::Add(value) => handle_add_command(&mut app_state.ui, &query_mgr, value),
+                Command::DeleteDip(id) => {
+                    handle_delete_dip_command(&mut app_state.ui, &query_mgr, id)
+                }
             },
             Event::Nav(page) => {
                 app_state.ui.navigate(&page);
